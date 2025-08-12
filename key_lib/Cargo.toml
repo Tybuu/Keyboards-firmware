@@ -1,0 +1,43 @@
+[package]
+name = "key-lib"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+embassy-embedded-hal = { version = "*", features = ["defmt"] }
+embassy-sync = { version = "*", features = ["defmt"] }
+embassy-time = { version = "*", features = ["defmt", "defmt-timestamp-uptime"] }
+embassy-usb = { version = "*", features = ["defmt"] }
+embassy-futures = { version = "*" }
+
+defmt = "0.3"
+defmt-rtt = "0.4"
+fixed = "1.23.1"
+fixed-macro = "1.2"
+
+panic-probe = { version = "0.3", features = ["print-defmt"] }
+byte-slice-cast = { version = "1.2.0", default-features = false }
+heapless = "0.8"
+usbd-hid = "0.7.0"
+
+embedded-hal-1 = { package = "embedded-hal", version = "1.0" }
+embedded-hal-async = "1.0"
+embedded-hal-bus = { version = "0.1", features = ["async"] }
+embedded-io-async = { version = "0.6.1", features = ["defmt-03"] }
+embedded-storage = { version = "0.3" }
+static_cell = "2"
+portable-atomic = { version = "1.5", features = ["critical-section"] }
+log = "0.4"
+embedded-sdmmc = "0.7.0"
+num_enum = {version = "*", default-features = false}
+
+sequential-storage = "*"
+embedded-storage-async = "*"
+
+[profile.release]
+debug = 2
+
+[profile.dev]
+lto = true
+opt-level = "z"
+
