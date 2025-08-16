@@ -7,8 +7,11 @@ use embassy_time::Timer;
 
 use key_lib::{
     position::{KeySensors, KeyState},
+    slave_com::Master,
     NUM_KEYS,
 };
+
+use crate::slave_com::HidMaster;
 
 pub struct HallEffectSensors<'p, 'd, const N: usize, const M: usize> {
     chans: [Channel<'p>; N],
@@ -80,7 +83,7 @@ impl<'p, 'd, const N: usize, const M: usize> KeySensors for HallEffectSensors<'p
 
 pub struct MasterSensors<'p, 'd, 'ch, const N: usize, const M: usize> {
     sensors: HallEffectSensors<'p, 'd, N, M>,
-    slave_chan: Receiver<'ch, ThreadModeRawMutex, u32, 5>,
+    slave_chan: HidMaster<'ch>,
 }
 
 impl<'p, 'd, 'ch, const N: usize, const M: usize> MasterSensors<'p, 'd, 'ch, N, M> {
@@ -88,7 +91,7 @@ impl<'p, 'd, 'ch, const N: usize, const M: usize> MasterSensors<'p, 'd, 'ch, N, 
         chans: [Channel<'p>; N],
         sel: [Output<'p>; M],
         adc: Adc<'d, Async>,
-        slave_chan: Receiver<'ch, ThreadModeRawMutex, u32, 5>,
+        slave_chan: HidMaster<'ch>,
         order: [usize; NUM_KEYS / 2],
     ) -> Self {
         Self {
@@ -102,7 +105,7 @@ impl<'p, 'd, 'ch, const N: usize, const M: usize> KeySensors for MasterSensors<'
     type Item = u16;
     async fn update_positions<T: KeyState<Item = Self::Item>>(&mut self, positions: &mut [T]) {
         self.sensors.update_positions(positions).await;
-        if let Ok(slave_rep) = self.slave_chan.try_receive() {
+        if let Some(slave_rep) = self.slave_chan.try_get_slave_state() {
             let offset = NUM_KEYS / 2;
             for i in 0..(offset) {
                 let val = (slave_rep >> i) & 1;

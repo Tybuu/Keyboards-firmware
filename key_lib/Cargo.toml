@@ -34,6 +34,7 @@ num_enum = {version = "*", default-features = false}
 
 sequential-storage = "*"
 embedded-storage-async = "*"
+embedded-io = "*"
 
 [profile.release]
 debug = 2

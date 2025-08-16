@@ -10,7 +10,7 @@ use core::time;
 
 use defmt::info;
 use embassy_executor::Spawner;
-use embassy_futures::join::join;
+use embassy_futures::join::{join, join3};
 use embassy_rp::adc::{self, Adc, Channel, Config as AdcConfig};
 use embassy_rp::gpio::{Input, Pull};
 use embassy_rp::{bind_interrupts, gpio, peripherals, usb};
@@ -25,6 +25,7 @@ use key_lib::keys::SlaveKeys;
 use key_lib::position::{DefaultSwitch, HeSwitch, KeySensors};
 use key_lib::NUM_KEYS;
 use tybeast_ones_he::sensors::HallEffectSensors;
+use tybeast_ones_he::slave_com::HidSlaveTask;
 use usbd_hid::descriptor::SerializedDescriptor;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -87,8 +88,7 @@ async fn main(_spawner: Spawner) {
         max_packet_size: 64,
     };
 
-    let (_, mut key_writer) =
-        HidReaderWriter::<_, 32, 32>::new(&mut builder, &mut key_state, key_config).split();
+    let slave_hid = HidReaderWriter::<_, 32, 32>::new(&mut builder, &mut key_state, key_config);
     let com_hid = HidReaderWriter::<_, 32, 32>::new(&mut builder, &mut com_state, com_config);
 
     let (mut c_reader, mut c_writer) = com_hid.split();
@@ -116,19 +116,18 @@ async fn main(_spawner: Spawner) {
 
     let sensors = HallEffectSensors::new([a0, a1, a2, a3], [sel0, sel1, sel2], adc, order);
 
-    let mut keys = SlaveKeys::<HeSwitch, _>::new(sensors);
+    let slave_hid_task = HidSlaveTask::new();
+
+    let mut keys = SlaveKeys::<HeSwitch, _, u32, _>::new(sensors, slave_hid_task.chan());
 
     // Main keyboard loop
     let key_loop = async {
         loop {
-            let rep = keys.generate_report().await;
-            if let Some(rep) = rep {
-                key_writer.write_serialize(rep).await.unwrap();
-            }
+            let rep = keys.send_report().await;
             Timer::after_micros(5).await;
         }
     };
-    join(usb_fut, key_loop).await;
+    join3(usb_fut, key_loop, slave_hid_task.run(slave_hid)).await;
 }
 
 struct MyDeviceHandler {

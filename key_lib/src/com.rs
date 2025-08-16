@@ -15,13 +15,13 @@ use crate::{IS_SPLIT, NUM_CONFIGS, NUM_KEYS, NUM_LAYERS};
 
 const BUFFER_SIZE: usize = 32;
 
-pub struct ContiniousWriter<'d, T: Driver<'d>> {
+pub struct ContinuousWriter<'d, T: Driver<'d>> {
     writer: HidWriter<'d, T, 32>,
     index: usize,
     buffer: BufferReport,
 }
 
-impl<'d, T: Driver<'d>> ContiniousWriter<'d, T> {
+impl<'d, T: Driver<'d>> ContinuousWriter<'d, T> {
     pub fn new(writer: HidWriter<'d, T, 32>) -> Self {
         Self {
             writer,
@@ -59,14 +59,14 @@ impl<'d, T: Driver<'d>> ContiniousWriter<'d, T> {
     }
 }
 
-pub struct ContiniousReader<'d, T: Driver<'d>> {
+pub struct ContinuousReader<'d, T: Driver<'d>> {
     reader: HidReader<'d, T, 32>,
     index: usize,
     buffer_len: usize,
     buffer: [u8; 32],
 }
 
-impl<'d, T: Driver<'d>> ContiniousReader<'d, T> {
+impl<'d, T: Driver<'d>> ContinuousReader<'d, T> {
     pub fn new(reader: HidReader<'d, T, 32>) -> Self {
         Self {
             reader,
@@ -137,8 +137,8 @@ impl From<u8> for HidRequest {
 }
 pub struct Com<'a, 'd, M: RawMutex, T: Driver<'d>, K: KeyState, I: ConfigIndicator> {
     keys: &'a Mutex<M, Keys<K, I>>,
-    reader: ContiniousReader<'d, T>,
-    writer: ContiniousWriter<'d, T>,
+    reader: ContinuousReader<'d, T>,
+    writer: ContinuousWriter<'d, T>,
 }
 
 impl<'a, 'd, M: RawMutex, T: Driver<'d>, K: KeyState, I: ConfigIndicator> Com<'a, 'd, M, T, K, I> {
@@ -149,8 +149,8 @@ impl<'a, 'd, M: RawMutex, T: Driver<'d>, K: KeyState, I: ConfigIndicator> Com<'a
     ) -> Self {
         Self {
             keys,
-            reader: ContiniousReader::new(reader),
-            writer: ContiniousWriter::new(writer),
+            reader: ContinuousReader::new(reader),
+            writer: ContinuousWriter::new(writer),
         }
     }
 

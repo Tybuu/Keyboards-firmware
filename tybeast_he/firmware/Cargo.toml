@@ -6,7 +6,7 @@ license = "MIT OR Apache-2.0"
 
 
 [dependencies]
-key-lib = {path = "../key_lib/", features = ["hall-effect", "split"]}
+key-lib = {path = "../../key_lib/", features = ["hall-effect", "split"]}
 embassy-embedded-hal = { version = "0.4.0", features = ["defmt"] }
 embassy-sync = { version = "0.7.0", features = ["defmt"] }
 embassy-executor = { version = "0.8.0", features = [

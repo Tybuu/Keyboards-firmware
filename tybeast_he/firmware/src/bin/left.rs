@@ -32,6 +32,7 @@ use sequential_storage::cache::NoCache;
 use static_cell::StaticCell;
 use tybeast_ones_he::indicator::{Indicator, IndicatorTask};
 use tybeast_ones_he::sensors::MasterSensors;
+use tybeast_ones_he::slave_com::HidMasterTask;
 use usbd_hid::descriptor::SerializedDescriptor;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -140,8 +141,6 @@ async fn main(_spawner: Spawner) {
     .await;
     _spawner.spawn(storage_task(storage)).unwrap();
 
-    let slave_chan = Channel::new();
-
     // Sel Pins
     let sel0 = Output::new(p.PIN_2, Level::Low);
     let sel1 = Output::new(p.PIN_1, Level::Low);
@@ -158,11 +157,13 @@ async fn main(_spawner: Spawner) {
         7, 14, 2, 18, 5, 0, 3, 11, 6, 1, 9, 4, 15, 19, 10, 13, 17, 8, 12, 16, 20,
     ];
     find_order(&mut order);
+
+    let hid_master_task = HidMasterTask::new();
     let mut key_sensors = MasterSensors::new(
         [a0, a1, a2, a3],
         [sel0, sel1, sel2],
         adc,
-        slave_chan.receiver(),
+        hid_master_task.chan(),
         order,
     );
 
@@ -212,21 +213,11 @@ async fn main(_spawner: Spawner) {
         }
     };
 
-    let slave_loop = async {
-        loop {
-            let mut buf = [0u8; 32];
-            slave_hid.read(&mut buf).await.unwrap();
-            if buf[0] == 5 {
-                let slave_rep = u32::from_le_bytes([buf[1], buf[2], buf[3], 0]);
-                slave_chan.send(slave_rep).await;
-            }
-        }
-    };
     join4(
         usb_fut,
         join(com.com_loop(), indicator_task.run()),
         key_loop,
-        slave_loop,
+        hid_master_task.run(slave_hid),
     )
     .await;
 }

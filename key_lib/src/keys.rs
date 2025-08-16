@@ -2,17 +2,17 @@ use core::{mem, ops::Range};
 
 use defmt::{error, info};
 use embassy_time::Timer;
-use embassy_usb::{class::hid::HidWriter, driver::Driver};
+use embassy_usb::driver::Driver;
 use heapless::Vec;
 use sequential_storage::map::Value;
 
 use crate::{
     NUM_KEYS, NUM_LAYERS,
     codes::{HidScanCodeType, MAX_SERIAL_LENGTH, ScanCodeBehavior, ScanCodeLayerStorage},
-    com::{ContiniousReader, ContiniousWriter},
-    descriptor::SlaveReport,
+    com::{ContinuousReader, ContinuousWriter},
     position::{KeySensors, KeyState},
     scan_codes::ReportCodes,
+    slave_com::{Slave, SlaveState},
     storage::{StorageItem, StorageKey, get_item, store_val},
 };
 
@@ -35,7 +35,7 @@ enum PressResult {
 pub struct Keys<K: KeyState, I: ConfigIndicator> {
     codes: [[ScanCodeBehavior; NUM_LAYERS]; NUM_KEYS],
     key_states: [K; NUM_KEYS],
-    pub indicator: Option<I>,
+    indicator: Option<I>,
     pub current_layer: [Option<usize>; NUM_KEYS],
     pub config_num: usize,
 }
@@ -183,7 +183,7 @@ impl<K: KeyState, I: ConfigIndicator> Keys<K, I> {
         }
     }
 
-    pub async fn write_keys_to_com<'d, T: Driver<'d>>(&self, writer: &mut ContiniousWriter<'d, T>) {
+    pub async fn write_keys_to_com<'d, T: Driver<'d>>(&self, writer: &mut ContinuousWriter<'d, T>) {
         let mut buf = [0u8; MAX_SERIAL_LENGTH];
         for codes in self.codes {
             for code in codes {
@@ -255,7 +255,7 @@ impl<K: KeyState, I: ConfigIndicator> Keys<K, I> {
     }
     pub async fn load_keys_from_com<'d, T: Driver<'d>>(
         &mut self,
-        reader: &mut ContiniousReader<'d, T>,
+        reader: &mut ContinuousReader<'d, T>,
         config_num: usize,
     ) -> Result<(), sequential_storage::map::SerializationError> {
         self.config_num = config_num;
@@ -277,18 +277,22 @@ impl<K: KeyState, I: ConfigIndicator> Keys<K, I> {
     }
 }
 
-pub struct SlaveKeys<K: KeyState<Item = S::Item>, S: KeySensors> {
+pub struct SlaveKeys<K: KeyState<Item = KS::Item>, KS: KeySensors, SL: SlaveState, S: Slave> {
     states: [K; NUM_KEYS / 2],
-    sensors: S,
-    report: SlaveReport,
+    sensors: KS,
+    slave_state: SL,
+    slave_sender: S,
 }
 
-impl<K: KeyState<Item = S::Item>, S: KeySensors> SlaveKeys<K, S> {
-    pub fn new(sensors: S) -> Self {
+impl<K: KeyState<Item = KS::Item>, KS: KeySensors, SL: SlaveState, S: Slave<SlaveState = SL>>
+    SlaveKeys<K, KS, SL, S>
+{
+    pub fn new(sensors: KS, slave_sender: S) -> Self {
         Self {
             states: [K::DEFAULT; NUM_KEYS / 2],
             sensors,
-            report: SlaveReport::default(),
+            slave_state: SL::DEFAULT,
+            slave_sender,
         }
     }
 
@@ -297,21 +301,15 @@ impl<K: KeyState<Item = S::Item>, S: KeySensors> SlaveKeys<K, S> {
         self.sensors.setup(&mut self.states).await;
     }
 
-    pub async fn generate_report(&mut self) -> Option<&SlaveReport> {
+    pub async fn send_report(&mut self) {
         self.sensors.update_positions(&mut self.states).await;
-        let mut new_report = SlaveReport::default();
+        let mut new_state = SL::DEFAULT;
         for (i, state) in self.states.iter().enumerate() {
-            if state.is_pressed() {
-                let a_idx = i / 8;
-                let b_idx = i % 8;
-                new_report.input[a_idx] |= 1 << b_idx;
-            }
+            new_state.update_state(i, state.is_pressed());
         }
-        if new_report != self.report {
-            self.report = new_report;
-            Some(&self.report)
-        } else {
-            None
+        if new_state != self.slave_state {
+            self.slave_state = new_state;
+            self.slave_sender.send_slave_state(self.slave_state).await;
         }
     }
 }
