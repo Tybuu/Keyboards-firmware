@@ -4,7 +4,7 @@ use heapless::Vec;
 
 use crate::{
     descriptor::{KeyboardReportNKRO, MouseReport},
-    keys::Keys,
+    keys::{ConfigIndicator, Keys},
     position::{KeySensors, KeyState},
     scan_codes::ReportCodes,
 };
@@ -115,9 +115,9 @@ impl<S: KeySensors> Report<S> {
 
     /// Generates a report with the provided keys. Returns a option tuple
     /// where it returns a Some when a report need to be sent
-    pub async fn generate_report<K: KeyState<Item = S::Item>>(
+    pub async fn generate_report<K: KeyState<Item = S::Item>, I: ConfigIndicator>(
         &mut self,
-        keys: &mut Keys<K>,
+        keys: &mut Keys<K, I>,
     ) -> (Option<&KeyboardReportNKRO>, Option<&MouseReport>) {
         let mut new_layer = None;
         let mut pressed_keys = Vec::<ReportCodes, 64>::new();

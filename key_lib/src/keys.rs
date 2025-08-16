@@ -1,19 +1,30 @@
 use core::{mem, ops::Range};
 
 use defmt::{error, info};
-use embassy_time::{Duration, Instant, Timer};
-use embassy_usb::driver::Driver;
+use embassy_time::Timer;
+use embassy_usb::{class::hid::HidWriter, driver::Driver};
 use heapless::Vec;
-use sequential_storage::map::{SerializationError, Value, store_item};
+use sequential_storage::map::Value;
 
 use crate::{
     NUM_KEYS, NUM_LAYERS,
     codes::{HidScanCodeType, MAX_SERIAL_LENGTH, ScanCodeBehavior, ScanCodeLayerStorage},
     com::{ContiniousReader, ContiniousWriter},
+    descriptor::SlaveReport,
     position::{KeySensors, KeyState},
-    scan_codes::{KeyCodes, ReportCodes},
+    scan_codes::ReportCodes,
     storage::{StorageItem, StorageKey, get_item, store_val},
 };
+
+pub enum Indicate {
+    Config(usize),
+    Enable,
+    Disable,
+}
+pub trait ConfigIndicator {
+    fn indicate_config(&self, config_num: Indicate) -> impl Future<Output = ()>;
+}
+
 enum PressResult {
     Pressed,
     Function,
@@ -21,22 +32,28 @@ enum PressResult {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct Keys<K: KeyState> {
+pub struct Keys<K: KeyState, I: ConfigIndicator> {
     codes: [[ScanCodeBehavior; NUM_LAYERS]; NUM_KEYS],
     key_states: [K; NUM_KEYS],
+    pub indicator: Option<I>,
     pub current_layer: [Option<usize>; NUM_KEYS],
     pub config_num: usize,
 }
 
-impl<K: KeyState> Keys<K> {
+impl<K: KeyState, I: ConfigIndicator> Keys<K, I> {
     /// Returns a Keys struct
     pub const fn default() -> Self {
         Self {
             codes: [[ScanCodeBehavior::default(); NUM_LAYERS]; NUM_KEYS],
             key_states: [K::DEFAULT; NUM_KEYS],
+            indicator: None,
             current_layer: [None; NUM_KEYS],
             config_num: 0,
         }
+    }
+
+    pub fn set_indicator(&mut self, indicator: I) {
+        self.indicator = Some(indicator);
     }
 
     pub fn set_position_type_ranged(&mut self, range: Range<usize>, switch_type: K) {
@@ -55,6 +72,7 @@ impl<K: KeyState> Keys<K> {
         sensors.update_positions(&mut self.key_states).await;
     }
 
+    #[cfg(feature = "hall-effect")]
     pub async fn setup_positions(&mut self, sensors: &mut impl KeySensors<Item = K::Item>) {
         sensors.setup(&mut self.key_states).await;
     }
@@ -228,21 +246,72 @@ impl<K: KeyState> Keys<K> {
                 }
             }
         }
+        if let Some(indicator) = self.indicator.as_ref() {
+            indicator
+                .indicate_config(Indicate::Config(self.config_num))
+                .await;
+        }
         Ok(())
     }
-    pub async fn load_keys_from_com<'a, 'd, T: Driver<'d>>(
+    pub async fn load_keys_from_com<'d, T: Driver<'d>>(
         &mut self,
         reader: &mut ContiniousReader<'d, T>,
+        config_num: usize,
     ) -> Result<(), sequential_storage::map::SerializationError> {
+        self.config_num = config_num;
         let mut buf = [0u8; MAX_SERIAL_LENGTH];
         for code in self.codes.iter_mut().flatten() {
-            buf[0] = reader.pop().await.into();
+            buf[0] = reader.pop().await;
             let hid_type: HidScanCodeType = buf[0]
                 .try_into()
                 .map_err(|_| sequential_storage::map::SerializationError::InvalidFormat)?;
             reader.pop_slice(&mut buf[1..hid_type.get_len()]).await;
             *code = ScanCodeBehavior::deserialize_from(&buf[..hid_type.get_len()]).unwrap();
         }
+        if let Some(indicator) = self.indicator.as_ref() {
+            indicator
+                .indicate_config(Indicate::Config(self.config_num))
+                .await;
+        }
         Ok(())
+    }
+}
+
+pub struct SlaveKeys<K: KeyState<Item = S::Item>, S: KeySensors> {
+    states: [K; NUM_KEYS / 2],
+    sensors: S,
+    report: SlaveReport,
+}
+
+impl<K: KeyState<Item = S::Item>, S: KeySensors> SlaveKeys<K, S> {
+    pub fn new(sensors: S) -> Self {
+        Self {
+            states: [K::DEFAULT; NUM_KEYS / 2],
+            sensors,
+            report: SlaveReport::default(),
+        }
+    }
+
+    #[cfg(feature = "hall-effect")]
+    pub async fn setup_keys(&mut self) {
+        self.sensors.setup(&mut self.states).await;
+    }
+
+    pub async fn generate_report(&mut self) -> Option<&SlaveReport> {
+        self.sensors.update_positions(&mut self.states).await;
+        let mut new_report = SlaveReport::default();
+        for (i, state) in self.states.iter().enumerate() {
+            if state.is_pressed() {
+                let a_idx = i / 8;
+                let b_idx = i % 8;
+                new_report.input[a_idx] |= 1 << b_idx;
+            }
+        }
+        if new_report != self.report {
+            self.report = new_report;
+            Some(&self.report)
+        } else {
+            None
+        }
     }
 }

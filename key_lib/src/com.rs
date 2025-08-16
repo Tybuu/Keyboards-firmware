@@ -7,11 +7,11 @@ use embassy_time::Instant;
 use embassy_usb::class::hid::{HidReader, HidWriter};
 use embassy_usb::driver::Driver;
 
-use crate::keys::Keys;
+use crate::keys::{ConfigIndicator, Keys};
 
 use crate::descriptor::BufferReport;
 use crate::position::KeyState;
-use crate::{NUM_CONFIGS, NUM_KEYS, NUM_LAYERS};
+use crate::{IS_SPLIT, NUM_CONFIGS, NUM_KEYS, NUM_LAYERS};
 
 const BUFFER_SIZE: usize = 32;
 
@@ -91,8 +91,7 @@ impl<'d, T: Driver<'d>> ContiniousReader<'d, T> {
         if self.index == self.buffer_len {
             self.index = 0;
         }
-
-        return val;
+        val
     }
 
     pub async fn pop_slice(&mut self, buf: &mut [u8]) {
@@ -136,15 +135,15 @@ impl From<u8> for HidRequest {
         }
     }
 }
-pub struct Com<'a, 'd, M: RawMutex, T: Driver<'d>, K: KeyState> {
-    keys: &'a Mutex<M, Keys<K>>,
+pub struct Com<'a, 'd, M: RawMutex, T: Driver<'d>, K: KeyState, I: ConfigIndicator> {
+    keys: &'a Mutex<M, Keys<K, I>>,
     reader: ContiniousReader<'d, T>,
     writer: ContiniousWriter<'d, T>,
 }
 
-impl<'a, 'd, M: RawMutex, T: Driver<'d>, K: KeyState> Com<'a, 'd, M, T, K> {
+impl<'a, 'd, M: RawMutex, T: Driver<'d>, K: KeyState, I: ConfigIndicator> Com<'a, 'd, M, T, K, I> {
     pub fn new(
-        keys: &'a Mutex<M, Keys<K>>,
+        keys: &'a Mutex<M, Keys<K, I>>,
         reader: HidReader<'d, T, BUFFER_SIZE>,
         writer: HidWriter<'d, T, BUFFER_SIZE>,
     ) -> Self {
@@ -162,14 +161,13 @@ impl<'a, 'd, M: RawMutex, T: Driver<'d>, K: KeyState> Com<'a, 'd, M, T, K> {
                 HidRequest::UpdateKeys => {
                     let config_num = self.reader.pop().await as usize;
                     let mut keys = self.keys.lock().await;
-                    keys.config_num = config_num;
-                    match keys.load_keys_from_com(&mut self.reader).await {
+                    match keys.load_keys_from_com(&mut self.reader, config_num).await {
                         Ok(_) => {
                             info!("Finished Receiving bytes");
                         }
                         Err(_) => {
                             error!("Unable to read from com to deserialzie keyboard config");
-                            keys.load_keys_from_storage(0).await;
+                            let _ = keys.load_keys_from_storage(0).await;
                         }
                     }
                     drop(keys);
@@ -184,7 +182,7 @@ impl<'a, 'd, M: RawMutex, T: Driver<'d>, K: KeyState> Com<'a, 'd, M, T, K> {
                             lock.deref()
                         } else {
                             drop(lock);
-                            default_keys.load_keys_from_storage(config_num).await;
+                            let _ = default_keys.load_keys_from_storage(config_num).await;
                             &default_keys
                         };
                         let load_time = Instant::now();
@@ -210,7 +208,9 @@ impl<'a, 'd, M: RawMutex, T: Driver<'d>, K: KeyState> Com<'a, 'd, M, T, K> {
                             drop(lock);
                             &mut default_keys
                         };
-                        keys.load_keys_from_com(&mut self.reader).await.unwrap();
+                        keys.load_keys_from_com(&mut self.reader, config_num)
+                            .await
+                            .unwrap();
                         if config_num == 0 {
                             info!("Buffer len: {}", self.reader.buffer_len);
                         }
@@ -226,7 +226,7 @@ impl<'a, 'd, M: RawMutex, T: Driver<'d>, K: KeyState> Com<'a, 'd, M, T, K> {
                             NUM_CONFIGS as u8,
                             NUM_KEYS as u8,
                             NUM_LAYERS as u8,
-                            true as u8, // isSplit value
+                            IS_SPLIT as u8,
                         ])
                         .await;
                     self.writer.flush().await;

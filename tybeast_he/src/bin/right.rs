@@ -6,25 +6,25 @@
 #![no_main]
 
 use core::sync::atomic::{AtomicBool, Ordering};
+use core::time;
 
 use defmt::info;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_rp::adc::{self, Adc, Channel, Config as AdcConfig};
-use embassy_rp::gpio::{Pin, Pull};
+use embassy_rp::gpio::{Input, Pull};
 use embassy_rp::{bind_interrupts, gpio, peripherals, usb};
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::mutex::Mutex;
 use embassy_time::Timer;
-use keyboard::descriptor::{BufferReport, KeyboardReportNKRO, MouseReport, SlaveKeyReport};
-use keyboard::keys::Keys;
 
 use embassy_rp::usb::Driver;
 use embassy_usb::class::hid::{HidReaderWriter, HidWriter, State};
 use embassy_usb::{Builder, Config, Handler};
 use gpio::{Level, Output};
-use keyboard::report::Report;
-use tybeast_ones_he::descriptor::{BufferReport, SlaveKeyReport};
+use key_lib::descriptor::{BufferReport, SlaveReport};
+use key_lib::keys::SlaveKeys;
+use key_lib::position::{DefaultSwitch, HeSwitch, KeySensors};
+use key_lib::NUM_KEYS;
+use tybeast_ones_he::sensors::HallEffectSensors;
 use usbd_hid::descriptor::SerializedDescriptor;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -32,13 +32,6 @@ bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<peripherals::USB>;
     ADC_IRQ_FIFO => adc::InterruptHandler;
 });
-
-static MUX: Mutex<CriticalSectionRawMutex, [u8; 3]> = Mutex::new([0u8; 3]);
-
-const SCROLL_TIME: u64 = 500;
-const MOUSE_POINTER_TIME: u64 = 10;
-
-const NUM_KEYS: usize = 21;
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -50,7 +43,7 @@ async fn main(_spawner: Spawner) {
     // Create embassy-usb Config
     let mut config = Config::new(0x727, 0x727);
     config.manufacturer = Some("Tybeast Corp.");
-    config.product = Some("Tybeast Ones (Right)");
+    config.product = Some("Tybeast Ones HE (Right)");
     config.max_power = 500;
     config.max_packet_size_0 = 64;
     config.composite_with_iads = true;
@@ -67,9 +60,7 @@ async fn main(_spawner: Spawner) {
     let mut device_handler = MyDeviceHandler::new();
 
     let mut key_state = State::new();
-    let mut slave_state = State::new();
     let mut com_state = State::new();
-    let mut mouse_state = State::new();
 
     let mut builder = Builder::new(
         driver,
@@ -84,20 +75,21 @@ async fn main(_spawner: Spawner) {
 
     // Create classes on the builder.
     let key_config = embassy_usb::class::hid::Config {
-        report_descriptor: SlaveKeyReport::desc(),
+        report_descriptor: SlaveReport::desc(),
         request_handler: None,
         poll_ms: 1,
-        max_packet_size: 32,
+        max_packet_size: 64,
     };
     let com_config = embassy_usb::class::hid::Config {
         report_descriptor: BufferReport::desc(),
         request_handler: None,
-        poll_ms: 60,
+        poll_ms: 1,
         max_packet_size: 64,
     };
 
-    let mut key_writer = HidWriter::<_, 29>::new(&mut builder, &mut key_state, key_config);
-    let com_hid = HidReaderWriter::<_, 32, 64>::new(&mut builder, &mut com_state, com_config);
+    let (_, mut key_writer) =
+        HidReaderWriter::<_, 32, 32>::new(&mut builder, &mut key_state, key_config).split();
+    let com_hid = HidReaderWriter::<_, 32, 32>::new(&mut builder, &mut com_state, com_config);
 
     let (mut c_reader, mut c_writer) = com_hid.split();
 
@@ -106,78 +98,37 @@ async fn main(_spawner: Spawner) {
     let usb_fut = usb.run();
 
     // Sel Pins
-    let mut sel0 = Output::new(p.PIN_0, Level::Low);
-    let mut sel1 = Output::new(p.PIN_1, Level::Low);
-    let mut sel2 = Output::new(p.PIN_2, Level::Low);
+    let sel0 = Output::new(p.PIN_0, Level::Low);
+    let sel1 = Output::new(p.PIN_1, Level::Low);
+    let sel2 = Output::new(p.PIN_2, Level::Low);
 
     // Adc
-    let mut adc = Adc::new(p.ADC, Irqs, AdcConfig::default());
-    let mut a3 = Channel::new_pin(p.PIN_26, Pull::None);
-    let mut a2 = Channel::new_pin(p.PIN_27, Pull::None);
-    let mut a1 = Channel::new_pin(p.PIN_28, Pull::None);
-    let mut a0 = Channel::new_pin(p.PIN_29, Pull::None);
+    let adc = Adc::new(p.ADC, Irqs, AdcConfig::default());
+    let a3 = Channel::new_pin(p.PIN_26, Pull::None);
+    let a2 = Channel::new_pin(p.PIN_27, Pull::None);
+    let a1 = Channel::new_pin(p.PIN_28, Pull::None);
+    let a0 = Channel::new_pin(p.PIN_29, Pull::None);
 
-    let mut order: [usize; NUM_KEYS] = [
+    let mut order: [usize; NUM_KEYS / 2] = [
         4, 5, 18, 2, 14, 7, 0, 9, 1, 6, 11, 3, 12, 17, 13, 10, 19, 15, 20, 16, 8,
     ];
     find_order(&mut order);
 
-    let mut keys = Keys::<NUM_KEYS>::default();
+    let sensors = HallEffectSensors::new([a0, a1, a2, a3], [sel0, sel1, sel2], adc, order);
 
-    let mut setup = false;
-    while !setup {
-        let mut pos = 0;
-        setup = true;
-        for i in order {
-            // Equivalent to pos % 4
-            let chan = pos & 0b11;
-            if chan == 0 {
-                // equivalent to pos / 4
-                change_sel(&mut sel0, &mut sel1, &mut sel2, pos >> 2);
-            }
-            let res = match chan {
-                0 => keys.setup(i, adc.read(&mut a0).await.unwrap()),
-                1 => keys.setup(i, adc.read(&mut a1).await.unwrap()),
-                2 => keys.setup(i, adc.read(&mut a2).await.unwrap()),
-                3 => keys.setup(i, adc.read(&mut a3).await.unwrap()),
-                _ => false,
-            };
-            setup = setup && res;
-            pos += 1;
-        }
-    }
-    let mut report = SlaveKeyReport::default();
+    let mut keys = SlaveKeys::<HeSwitch, _>::new(sensors);
 
     // Main keyboard loop
-    let usb_key_in = async {
+    let key_loop = async {
         loop {
-            let mut pos = 0;
-            for i in order {
-                let chan = pos % 4;
-                if chan == 0 {
-                    change_sel(&mut sel0, &mut sel1, &mut sel2, pos / 4);
-                    Timer::after_micros(1).await;
-                }
-                match chan {
-                    0 => keys.update_buf(i, adc.read(&mut a0).await.unwrap()),
-                    1 => keys.update_buf(i, adc.read(&mut a1).await.unwrap()),
-                    2 => keys.update_buf(i, adc.read(&mut a2).await.unwrap()),
-                    3 => keys.update_buf(i, adc.read(&mut a3).await.unwrap()),
-                    _ => {}
-                }
-                pos += 1;
+            let rep = keys.generate_report().await;
+            if let Some(rep) = rep {
+                key_writer.write_serialize(rep).await.unwrap();
             }
-            let key_report = report.generate_report(&mut keys);
-            match key_report {
-                Some(report) => {
-                    key_writer.write_serialize(&report).await.unwrap();
-                }
-                None => {}
-            }
+            Timer::after_micros(5).await;
         }
     };
-
-    join(usb_key_in, usb_fut).await;
+    join(usb_fut, key_loop).await;
 }
 
 struct MyDeviceHandler {
@@ -228,50 +179,10 @@ fn find_order(ary: &mut [usize]) {
     let mut new_ary = [0usize; 21 as usize];
     for i in 0..ary.len() {
         for j in 0..ary.len() {
-            if ary[j as usize] == i {
-                new_ary[i as usize] = j;
+            if ary[j] == i {
+                new_ary[i] = j;
             }
         }
     }
     ary.copy_from_slice(&new_ary);
-}
-
-fn change_sel(sel0: &mut Output, sel1: &mut Output, sel2: &mut Output, num: u8) {
-    match num {
-        0 => {
-            sel0.set_low();
-            sel1.set_low();
-            sel2.set_low();
-        }
-        1 => {
-            sel0.set_high();
-            sel1.set_low();
-            sel2.set_low();
-        }
-        2 => {
-            sel0.set_low();
-            sel1.set_high();
-            sel2.set_low();
-        }
-        3 => {
-            sel0.set_high();
-            sel1.set_high();
-            sel2.set_low();
-        }
-        4 => {
-            sel0.set_low();
-            sel1.set_low();
-            sel2.set_high();
-        }
-        5 => {
-            sel0.set_high();
-            sel1.set_low();
-            sel2.set_high();
-        }
-        _ => {
-            sel0.set_low();
-            sel1.set_low();
-            sel2.set_low();
-        }
-    }
 }

@@ -1,24 +1,25 @@
 use core::mem;
 
 use num_enum::TryFromPrimitive;
-use sequential_storage::map::{store_item, SerializationError, Value};
+use sequential_storage::map::{SerializationError, Value, store_item};
 
 use crate::scan_codes::KeyCodes;
 
 /// Wrapper around ScanCode to allow different fuctionalites when pressed
 /// such as sending multiple keys
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u8)]
 pub enum ScanCodeBehavior {
-    Single(KeyCodes),
-    Double(KeyCodes, KeyCodes),
-    Triple(KeyCodes, KeyCodes, KeyCodes),
+    Single(KeyCodes) = 0,
+    Double(KeyCodes, KeyCodes) = 1,
+    Triple(KeyCodes, KeyCodes, KeyCodes) = 2,
     // Return a different key code depending on the other indexed key press status
     CombinedKey {
         other_index: usize,
         normal_code: KeyCodes,
         combined_code: KeyCodes,
-    },
-    ChangeConfig(u8),
+    } = 3,
+    ChangeConfig(u8) = 4,
 }
 
 impl ScanCodeBehavior {
@@ -130,57 +131,6 @@ impl ScanCodeBehavior {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct ScanCodeLayerStorage<const N: usize> {
-    pub codes: [ScanCodeBehavior; N],
-}
-
-impl<const N: usize> ScanCodeLayerStorage<N> {
-    pub const fn default() -> Self {
-        Self {
-            codes: [ScanCodeBehavior::Single(KeyCodes::Undefined); N],
-        }
-    }
-}
-
-impl<'a, const N: usize> Value<'a> for ScanCodeLayerStorage<N> {
-    fn serialize_into(
-        &self,
-        buffer: &mut [u8],
-    ) -> Result<usize, sequential_storage::map::SerializationError> {
-        let storage_size: usize = self.codes.map(|x| x.into_buffer_len()).iter().sum();
-        if buffer.len() < storage_size {
-            Err(sequential_storage::map::SerializationError::BufferTooSmall)
-        } else {
-            let mut i = 0;
-            for code in self.codes {
-                let code_len = code.into_buffer_len();
-                code.into_buffer(&mut buffer[i..(i + code_len)])?;
-                i += code_len;
-            }
-            Ok(storage_size)
-        }
-    }
-
-    fn deserialize_from(
-        buffer: &'a [u8],
-    ) -> Result<Self, sequential_storage::map::SerializationError>
-    where
-        Self: Sized,
-    {
-        let mut codes = Self::default();
-        let mut buf_i = 0;
-        let mut code_i = 0;
-        while buf_i < buffer.len() {
-            let code = ScanCodeBehavior::deserialize_from(&buffer[buf_i..])?;
-            codes.codes[code_i] = code;
-            buf_i += code.into_buffer_len();
-            code_i += 1;
-        }
-        Ok(codes)
-    }
-}
-
 impl<'a> Value<'a> for ScanCodeBehavior {
     fn serialize_into(
         &self,
@@ -252,5 +202,56 @@ impl<'a> Value<'a> for ScanCodeBehavior {
                 }
             }
         }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct ScanCodeLayerStorage<const N: usize> {
+    pub codes: [ScanCodeBehavior; N],
+}
+
+impl<const N: usize> ScanCodeLayerStorage<N> {
+    pub const fn default() -> Self {
+        Self {
+            codes: [ScanCodeBehavior::Single(KeyCodes::Undefined); N],
+        }
+    }
+}
+
+impl<'a, const N: usize> Value<'a> for ScanCodeLayerStorage<N> {
+    fn serialize_into(
+        &self,
+        buffer: &mut [u8],
+    ) -> Result<usize, sequential_storage::map::SerializationError> {
+        let storage_size: usize = self.codes.map(|x| x.into_buffer_len()).iter().sum();
+        if buffer.len() < storage_size {
+            Err(sequential_storage::map::SerializationError::BufferTooSmall)
+        } else {
+            let mut i = 0;
+            for code in self.codes {
+                let code_len = code.into_buffer_len();
+                code.into_buffer(&mut buffer[i..(i + code_len)])?;
+                i += code_len;
+            }
+            Ok(storage_size)
+        }
+    }
+
+    fn deserialize_from(
+        buffer: &'a [u8],
+    ) -> Result<Self, sequential_storage::map::SerializationError>
+    where
+        Self: Sized,
+    {
+        let mut codes = Self::default();
+        let mut buf_i = 0;
+        let mut code_i = 0;
+        while buf_i < buffer.len() {
+            let code = ScanCodeBehavior::deserialize_from(&buffer[buf_i..])?;
+            codes.codes[code_i] = code;
+            buf_i += code.into_buffer_len();
+            code_i += 1;
+        }
+        Ok(codes)
     }
 }

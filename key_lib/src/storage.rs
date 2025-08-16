@@ -22,15 +22,6 @@ pub static STORAGE_SIGNAL_READ: Signal<CriticalSectionRawMutex, StorageKey> = Si
 pub static STORAGE_SIGNAL_ITEM: Signal<CriticalSectionRawMutex, Option<StorageItem>> =
     Signal::new();
 
-pub static STORAGE_READ_CHANNEL: Channel<
-    CriticalSectionRawMutex,
-    (
-        StorageKey,
-        &'static mut Signal<CriticalSectionRawMutex, Option<StorageItem>>,
-    ),
-    10,
-> = Channel::new();
-
 type InternalStorageKey = u16;
 
 #[derive(Debug, Clone, Copy, Format)]
@@ -71,6 +62,7 @@ impl<S: NorFlash, K: KeyCacheImpl<InternalStorageKey> + 'static> Storage<S, K> {
         let mut data_buffer = [0; 128];
 
         Timer::after_millis(10).await;
+
         // Check if the key value pair (0x0, 0x69) is in the map
         // If the pair is not in the map, it indicates that the
         // storage isn't initialized

@@ -1,3 +1,8 @@
+#[cfg(feature = "split")]
+const IS_SPLIT: usize = 1;
+#[cfg(not(feature = "split"))]
+const IS_SPLIT: usize = 0;
+
 fn main() {
     let num_configs = std::env::var("NUM_CONFIGS").expect("NUM_CONFIGS is not set"); // Default value
     println!("cargo:rerun-if-env-changed=NUM_CONFIGS");
@@ -8,8 +13,9 @@ fn main() {
     let contents = format!(
         r#"pub const NUM_CONFIGS: usize = {};
 pub const NUM_KEYS: usize = {};
-pub const NUM_LAYERS: usize = {};"#,
-        num_configs, num_keys, num_layers,
+pub const NUM_LAYERS: usize = {};
+pub const IS_SPLIT: usize = {};"#,
+        num_configs, num_keys, num_layers, IS_SPLIT,
     );
     std::fs::write("src/config.rs", contents).expect("Failed to write config.rs");
 }

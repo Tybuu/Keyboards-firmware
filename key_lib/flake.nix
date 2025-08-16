@@ -30,6 +30,7 @@
       NUM_KEYS = 42;
       NUM_CONFIGS = 3;
       NUM_LAYERS = 6;
+      IS_SPLIT = 1;
     };
   };
 }

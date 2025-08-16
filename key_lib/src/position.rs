@@ -1,14 +1,16 @@
-use core::u16;
-
-use embassy_sync::channel::Receiver;
-use embassy_time::Timer;
-
+#[cfg(feature = "hall-effect")]
 pub const DEFAULT_HIGH: u32 = 1700;
+#[cfg(feature = "hall-effect")]
 pub const DEFAULT_LOW: u32 = 1400;
+#[cfg(feature = "hall-effect")]
 const DIF: f32 = (DEFAULT_HIGH - DEFAULT_LOW) as f32;
+#[cfg(feature = "hall-effect")]
 const DEFAULT_RELEASE_SCALE: f32 = 0.30;
+#[cfg(feature = "hall-effect")]
 const DEFAULT_ACTUATE_SCALE: f32 = 0.35;
+#[cfg(feature = "hall-effect")]
 const TOLERANCE_SCALE: f32 = 0.1;
+#[cfg(feature = "hall-effect")]
 const BUFFER_SIZE: usize = 1;
 
 pub trait KeyState: Copy {
@@ -20,12 +22,16 @@ pub trait KeyState: Copy {
 
     fn reset(&mut self);
 
+    #[cfg(feature = "hall-effect")]
     fn is_analog(&self) -> bool;
 
+    #[cfg(feature = "hall-effect")]
     fn get_buf(&self) -> Self::Item;
 
+    #[cfg(feature = "hall-effect")]
     fn calibrate(&mut self, buf: Self::Item);
 
+    #[cfg(feature = "hall-effect")]
     fn setup(&mut self, buf: Self::Item) -> bool;
 }
 
@@ -49,25 +55,30 @@ impl KeyState for DefaultSwitch {
         self.state = false;
     }
 
+    #[cfg(feature = "hall-effect")]
     fn is_analog(&self) -> bool {
         false
     }
 
+    #[cfg(feature = "hall-effect")]
     fn calibrate(&mut self, _: Self::Item) {}
 
+    #[cfg(feature = "hall-effect")]
     fn get_buf(&self) -> Self::Item {
         self.state
     }
 
-    fn setup(&mut self, buf: Self::Item) -> bool {
+    #[cfg(feature = "hall-effect")]
+    fn setup(&mut self, _: Self::Item) -> bool {
         true
     }
 }
 
 // Makes hall effect switches act like a normal mechanical switch
+#[cfg(feature = "hall-effect")]
 #[derive(Copy, Clone, Default, Debug)]
 pub struct DigitalPosition {
-    buffer: [u16; BUFFER_SIZE as usize], // Take multiple readings to smooth out buffer
+    buffer: [u16; BUFFER_SIZE], // Take multiple readings to smooth out buffer
     buffer_pos: usize,
     release_point: u16,
     actuation_point: u16,
@@ -76,10 +87,11 @@ pub struct DigitalPosition {
     pressed: bool,
 }
 
+#[cfg(feature = "hall-effect")]
 impl KeyState for DigitalPosition {
     type Item = u16;
     const DEFAULT: Self = Self {
-        buffer: [0; BUFFER_SIZE as usize],
+        buffer: [0; BUFFER_SIZE],
         buffer_pos: 0,
         release_point: (DEFAULT_HIGH - (DEFAULT_RELEASE_SCALE * DIF) as u32) as u16,
         actuation_point: (DEFAULT_HIGH - (DEFAULT_ACTUATE_SCALE * DIF) as u32) as u16,
@@ -114,7 +126,7 @@ impl KeyState for DigitalPosition {
     fn get_buf(&self) -> u16 {
         let mut sum = 0;
         for buf in self.buffer {
-            sum += buf as u16;
+            sum += buf;
         }
         sum / BUFFER_SIZE as u16
     }
@@ -124,7 +136,7 @@ impl KeyState for DigitalPosition {
     fn setup(&mut self, reading: u16) -> bool {
         if self.buffer[0] == 0 || self.buffer_pos != 0 {
             self.buffer[self.buffer_pos] = reading;
-            self.buffer_pos = (self.buffer_pos + 1) % BUFFER_SIZE as usize;
+            self.buffer_pos = (self.buffer_pos + 1) % BUFFER_SIZE;
             false
         } else {
             let mut buf = 0;
@@ -166,8 +178,9 @@ impl KeyState for DigitalPosition {
 }
 
 #[derive(Copy, Clone, Default, Debug)]
+#[cfg(feature = "hall-effect")]
 pub struct WootingPosition {
-    buffer: [u16; BUFFER_SIZE as usize], // Take multiple readings to smooth out buffer
+    buffer: [u16; BUFFER_SIZE], // Take multiple readings to smooth out buffer
     buffer_pos: usize,
     release_point: u16,
     actuation_point: u16,
@@ -179,10 +192,11 @@ pub struct WootingPosition {
     tolerance: u16,
 }
 
+#[cfg(feature = "hall-effect")]
 impl KeyState for WootingPosition {
     type Item = u16;
     const DEFAULT: Self = Self {
-        buffer: [0; BUFFER_SIZE as usize],
+        buffer: [0; BUFFER_SIZE],
         last_pos: 0,
         buffer_pos: 0,
         release_point: (DEFAULT_HIGH - (DEFAULT_RELEASE_SCALE * DIF) as u32) as u16,
@@ -195,7 +209,7 @@ impl KeyState for WootingPosition {
     };
 
     fn update_buf(&mut self, pos: u16) {
-        self.buffer[self.buffer_pos as usize] = pos;
+        self.buffer[self.buffer_pos] = pos;
         self.buffer_pos = (self.buffer_pos + 1) % BUFFER_SIZE;
         let mut sum = 0;
         for buf in self.buffer {
@@ -238,14 +252,14 @@ impl KeyState for WootingPosition {
             let dif = (self.highest_point - self.lowest_point) as f32;
             self.release_point = self.highest_point - (DEFAULT_RELEASE_SCALE * dif) as u16;
             self.actuation_point = self.highest_point - (DEFAULT_ACTUATE_SCALE * dif) as u16;
-            self.tolerance = (dif as f32 * TOLERANCE_SCALE) as u16;
+            self.tolerance = (dif * TOLERANCE_SCALE) as u16;
         }
     }
 
     fn setup(&mut self, reading: u16) -> bool {
         if self.buffer[0] == 0 || self.buffer_pos != 0 {
             self.buffer[self.buffer_pos] = reading;
-            self.buffer_pos = (self.buffer_pos + 1) % BUFFER_SIZE as usize;
+            self.buffer_pos = (self.buffer_pos + 1) % BUFFER_SIZE;
             false
         } else {
             let mut buf = 0;
@@ -282,10 +296,13 @@ impl KeyState for WootingPosition {
 }
 
 #[derive(Copy, Clone)]
+#[cfg(feature = "hall-effect")]
 pub struct SlavePosition {
     state: u16,
     analog_reading: u16,
 }
+
+#[cfg(feature = "hall-effect")]
 impl KeyState for SlavePosition {
     const DEFAULT: Self = Self {
         state: 0,
@@ -326,12 +343,14 @@ impl KeyState for SlavePosition {
 }
 
 #[derive(Copy, Clone)]
+#[cfg(feature = "hall-effect")]
 pub enum HeSwitch {
     Wooting(WootingPosition),
     Digital(DigitalPosition),
     Slave(SlavePosition),
 }
 
+#[cfg(feature = "hall-effect")]
 impl KeyState for HeSwitch {
     const DEFAULT: Self = { Self::Wooting(WootingPosition::DEFAULT) };
 
@@ -397,6 +416,7 @@ pub trait KeySensors {
         positions: &mut [K],
     ) -> impl core::future::Future<Output = ()>;
 
+    #[cfg(feature = "hall-effect")]
     fn setup<K: KeyState<Item = Self::Item>>(
         &mut self,
         positions: &mut [K],

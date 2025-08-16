@@ -1,26 +1,24 @@
-//! This example test the RP Pico on board LED.
-//!
-//! It does not work with the RP Pico W board. See wifi_blinky.rs.
 #![no_std]
 #![no_main]
 
-use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use defmt::{error, info};
+use defmt::info;
 use embassy_executor::Spawner;
-use embassy_futures::join::{join, join3, join4};
+use embassy_futures::join::{join, join4};
 use embassy_rp::adc::{self, Adc, Channel as AdcChannel, Config as AdcConfig};
 use embassy_rp::flash::{Async, Flash};
-use embassy_rp::gpio::{Input, Level, Output, Pull};
+use embassy_rp::gpio::{Level, Output, Pull};
 use embassy_rp::peripherals::FLASH;
+use embassy_rp::pio::Pio;
+use embassy_rp::pio_programs::ws2812::{PioWs2812, PioWs2812Program};
 use embassy_rp::{bind_interrupts, peripherals, usb};
 
 use embassy_rp::usb::Driver;
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::Timer;
 use embassy_usb::class::hid::{HidReaderWriter, HidWriter, State};
 use embassy_usb::{Builder, Config, Handler};
 use key_lib::com::Com;
@@ -32,7 +30,8 @@ use key_lib::storage::Storage;
 use key_lib::NUM_KEYS;
 use sequential_storage::cache::NoCache;
 use static_cell::StaticCell;
-use tybeast_ones_he::sensors::HallEffectSensors;
+use tybeast_ones_he::indicator::{Indicator, IndicatorTask};
+use tybeast_ones_he::sensors::MasterSensors;
 use usbd_hid::descriptor::SerializedDescriptor;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -40,13 +39,14 @@ const FLASH_START: u32 = 1024 * 1024;
 const FLASH_END: u32 = FLASH_START + 4096 * 5;
 const FLASH_SIZE: usize = 2 * 1024 * 1024;
 
-static KEYS: Mutex<ThreadModeRawMutex, Keys<HeSwitch>> = Mutex::new(Keys::default());
+static KEYS: Mutex<ThreadModeRawMutex, Keys<HeSwitch, Indicator>> = Mutex::new(Keys::default());
 
 static CACHE: StaticCell<NoCache> = StaticCell::new();
 
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<peripherals::USB>;
     ADC_IRQ_FIFO => adc::InterruptHandler;
+    PIO0_IRQ_0 => embassy_rp::pio::InterruptHandler<peripherals::PIO0>;
 });
 
 #[embassy_executor::task]
@@ -78,12 +78,12 @@ async fn main(_spawner: Spawner) {
     let mut bos_descriptor = [0; 256];
     let mut msos_descriptor = [0; 256];
     let mut control_buf = [0; 64];
-    let mut device_handler = MyDeviceHandler::new();
 
     let mut key_state = State::new();
     let mut slave_state = State::new();
     let mut mouse_state = State::new();
     let mut com_state = State::new();
+    let mut device_handler = MyDeviceHandler::new();
 
     let mut builder = Builder::new(
         driver,
@@ -94,9 +94,6 @@ async fn main(_spawner: Spawner) {
         &mut control_buf,
     );
 
-    builder.handler(&mut device_handler);
-
-    // Create classes on the builder.
     // Create classes on the builder.
     let key_config = embassy_usb::class::hid::Config {
         report_descriptor: KeyboardReportNKRO::desc(),
@@ -119,13 +116,13 @@ async fn main(_spawner: Spawner) {
     let mouse_config = embassy_usb::class::hid::Config {
         report_descriptor: MouseReport::desc(),
         request_handler: None,
-        poll_ms: 5,
+        poll_ms: 1,
         max_packet_size: 5,
     };
-
+    builder.handler(&mut device_handler);
     let mut key_writer = HidWriter::<_, 29>::new(&mut builder, &mut key_state, key_config);
     let mut slave_hid =
-        HidReaderWriter::<_, 10, 10>::new(&mut builder, &mut slave_state, slave_config);
+        HidReaderWriter::<_, 32, 32>::new(&mut builder, &mut slave_state, slave_config);
     let (com_reader, com_writer) =
         HidReaderWriter::<_, 32, 32>::new(&mut builder, &mut com_state, com_config).split();
     let mut mouse_writer = HidWriter::<_, 5>::new(&mut builder, &mut mouse_state, mouse_config);
@@ -134,7 +131,7 @@ async fn main(_spawner: Spawner) {
     let mut usb = builder.build();
     let usb_fut = usb.run();
 
-    let cache = CACHE.init_with(|| NoCache::new());
+    let cache = CACHE.init_with(NoCache::new);
     let storage = Storage::init(
         Flash::<_, Async, FLASH_SIZE>::new(p.FLASH, p.DMA_CH0),
         FLASH_START..FLASH_END,
@@ -144,6 +141,7 @@ async fn main(_spawner: Spawner) {
     _spawner.spawn(storage_task(storage)).unwrap();
 
     let slave_chan = Channel::new();
+
     // Sel Pins
     let sel0 = Output::new(p.PIN_2, Level::Low);
     let sel1 = Output::new(p.PIN_1, Level::Low);
@@ -160,7 +158,7 @@ async fn main(_spawner: Spawner) {
         7, 14, 2, 18, 5, 0, 3, 11, 6, 1, 9, 4, 15, 19, 10, 13, 17, 8, 12, 16, 20,
     ];
     find_order(&mut order);
-    let mut key_sensors = HallEffectSensors::new(
+    let mut key_sensors = MasterSensors::new(
         [a0, a1, a2, a3],
         [sel0, sel1, sel2],
         adc,
@@ -168,8 +166,17 @@ async fn main(_spawner: Spawner) {
         order,
     );
 
+    let Pio {
+        mut common, sm0, ..
+    } = Pio::new(p.PIO0, Irqs);
+    let program = PioWs2812Program::new(&mut common);
+    let ws2812 = PioWs2812::new(&mut common, sm0, p.DMA_CH1, p.PIN_17, &program);
+    let indicator_task = IndicatorTask::new(ws2812);
+    let indicator: Indicator = Indicator {};
+
     let mut keys = KEYS.lock().await;
-    keys.load_keys_from_storage(0).await;
+    keys.set_indicator(indicator);
+    let _ = keys.load_keys_from_storage(0).await;
     keys.set_position_type_ranged(
         (NUM_KEYS / 2)..NUM_KEYS,
         HeSwitch::Slave(SlavePosition::DEFAULT),
@@ -190,24 +197,18 @@ async fn main(_spawner: Spawner) {
                 drop(keys);
             }
             let key_task = async {
-                match key_rep {
-                    Some(rep) => {
-                        info!("Writing key report!");
-                        key_writer.write_serialize(rep).await.unwrap();
-                    }
-                    None => {}
+                if let Some(rep) = key_rep {
+                    info!("Writing key report!");
+                    key_writer.write_serialize(rep).await.unwrap();
                 }
             };
             let mouse_task = async {
-                match mouse_rep {
-                    Some(rep) => {
-                        mouse_writer.write_serialize(rep).await.unwrap();
-                    }
-                    None => {}
+                if let Some(rep) = mouse_rep {
+                    mouse_writer.write_serialize(rep).await.unwrap();
                 }
             };
             join(key_task, mouse_task).await;
-            Timer::after_micros(200).await;
+            Timer::after_micros(5).await;
         }
     };
 
@@ -221,17 +222,25 @@ async fn main(_spawner: Spawner) {
             }
         }
     };
-    join4(usb_fut, com.com_loop(), key_loop, slave_loop).await;
+    join4(
+        usb_fut,
+        join(com.com_loop(), indicator_task.run()),
+        key_loop,
+        slave_loop,
+    )
+    .await;
 }
 
 struct MyDeviceHandler {
     configured: AtomicBool,
+    indicator: Indicator,
 }
 
 impl MyDeviceHandler {
     fn new() -> Self {
         MyDeviceHandler {
             configured: AtomicBool::new(false),
+            indicator: Indicator {},
         }
     }
 }
@@ -246,9 +255,13 @@ impl Handler for MyDeviceHandler {
         }
     }
 
+    fn suspended(&mut self, suspended: bool) {
+        self.indicator.suspend(suspended);
+    }
+
     fn reset(&mut self) {
         self.configured.store(false, Ordering::Relaxed);
-        info!("Bus reset, the Vbus current limit is 100mA");
+        info!("Bus reset, the Vbus current limit is 500mA");
     }
 
     fn addressed(&mut self, addr: u8) {
@@ -272,8 +285,8 @@ fn find_order(ary: &mut [usize]) {
     let mut new_ary = [0usize; NUM_KEYS / 2];
     for i in 0..ary.len() {
         for j in 0..ary.len() {
-            if ary[j as usize] == i {
-                new_ary[i as usize] = j;
+            if ary[j] == i {
+                new_ary[i] = j;
             }
         }
     }

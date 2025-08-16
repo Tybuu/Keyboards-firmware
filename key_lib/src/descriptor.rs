@@ -3,8 +3,8 @@ use core::fmt;
 use heapless::Vec;
 use usbd_hid::descriptor::gen_hid_descriptor;
 use usbd_hid::descriptor::{
-    generator_prelude::{Serialize, SerializeTuple, SerializedDescriptor, Serializer},
     AsInputReport,
+    generator_prelude::{Serialize, SerializeTuple, SerializedDescriptor, Serializer},
 };
 
 #[gen_hid_descriptor(
@@ -22,7 +22,7 @@ use usbd_hid::descriptor::{
     }
 )]
 #[allow(dead_code)]
-#[derive(PartialEq, Eq)]
+#[derive(Default)]
 pub struct KeyboardReportNKRO {
     pub modifier: u8,
     pub nkro_keycodes: [u8; 28],
@@ -73,7 +73,7 @@ impl fmt::Display for KeyboardReportNKRO {
     }
 )]
 #[allow(dead_code)]
-#[derive(PartialEq, Eq, Default)]
+#[derive(Default)]
 pub struct MouseReport {
     pub buttons: u8,
     pub x: i8,
@@ -97,7 +97,7 @@ pub struct BufferReport {
 }
 
 #[gen_hid_descriptor(
-    (collection = APPLICATION, usage_page = 0xFF68, usage = 0x01) = {
+    (collection = APPLICATION, usage_page = 0xFF69, usage = 0x02) = {
         input=input;
         output=output;
     }
