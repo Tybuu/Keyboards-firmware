@@ -30,7 +30,7 @@ use key_lib::storage::Storage;
 use key_lib::NUM_KEYS;
 use sequential_storage::cache::NoCache;
 use static_cell::StaticCell;
-use tybeast_ones_he::indicator::{Indicator, IndicatorTask};
+use tybeast_ones_he::indicator::{Indicator, MasterIndicatorTask};
 use tybeast_ones_he::sensors::MasterSensors;
 use tybeast_ones_he::slave_com::HidMasterTask;
 use usbd_hid::descriptor::SerializedDescriptor;
@@ -172,11 +172,10 @@ async fn main(_spawner: Spawner) {
     } = Pio::new(p.PIO0, Irqs);
     let program = PioWs2812Program::new(&mut common);
     let ws2812 = PioWs2812::new(&mut common, sm0, p.DMA_CH1, p.PIN_17, &program);
-    let indicator_task = IndicatorTask::new(ws2812);
-    let indicator: Indicator = Indicator {};
+    let indicator_task = MasterIndicatorTask::new(ws2812, hid_master_task.chan());
 
     let mut keys = KEYS.lock().await;
-    keys.set_indicator(indicator);
+    keys.set_indicator(Indicator {});
     let _ = keys.load_keys_from_storage(0).await;
     keys.set_position_type_ranged(
         (NUM_KEYS / 2)..NUM_KEYS,

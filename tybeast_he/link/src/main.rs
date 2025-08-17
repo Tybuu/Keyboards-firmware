@@ -8,47 +8,17 @@ use futures::StreamExt;
 use tokio::join;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
+const USAGE_PAGE: u16 = 0xFF69;
+const USAGE: u16 = 0x2;
 #[tokio::main]
 async fn main() {
     env_logger::init();
     log::info!("hello");
-    let (mut ltr_sender, mut ltr_rec) = mpsc::channel(10);
-    let left_device_loop = async move {
-        let backend = HidBackend::default();
-        let dev = open_device(&backend, 0xFF69, 2, 0xa55, 0xa55).await;
-        let mut writer = dev.open_writeable().await.unwrap();
-        loop {
-            let buf: [u8; 33] = ltr_rec.recv().await.unwrap();
-            match writer.write_output_report(&buf).await {
-                Ok(_) => {}
-                Err(_) => {
-                    let dev = open_device(&backend, 0xFF69, 2, 0xa55, 0xa55).await;
-                    writer = dev.open_writeable().await.unwrap();
-                }
-            }
-        }
-    };
-
-    let right_device_loop = async move {
-        let backend = HidBackend::default();
-        let dev = open_device(&backend, 0xFF69, 2, 0x727, 0x727).await;
-        let mut reader = dev.open_readable().await.unwrap();
-        loop {
-            let mut buf = [0u8; 33];
-            match reader.read_input_report(&mut buf[1..]).await {
-                Ok(_) => {
-                    ltr_sender.send(buf).await.unwrap();
-                }
-                Err(_) => {
-                    let dev = open_device(&backend, 0xFF69, 2, 0x727, 0x727).await;
-                    reader = dev.open_readable().await.unwrap();
-                }
-            }
-        }
-    };
-    let l_handle = tokio::spawn(left_device_loop);
-    right_device_loop.await;
-    l_handle.await;
+    let (l_sender, l_rec) = mpsc::channel(10);
+    let (r_sender, r_rec) = mpsc::channel(10);
+    let l_future = run_device(r_rec, l_sender, USAGE_PAGE, USAGE, 0xa55, 0xa55);
+    let r_future = run_device(l_rec, r_sender, USAGE_PAGE, USAGE, 0x727, 0x727);
+    join!(l_future, r_future);
 }
 
 async fn open_device(
@@ -115,7 +85,7 @@ pub async fn run_device(
     usage_id: u16,
     vendor_id: u16,
     product_id: u16,
-) -> ! {
+) {
     let backend = HidBackend::default();
     loop {
         let dev = open_device(&backend, usage_page, usage_id, vendor_id, product_id).await;
@@ -125,6 +95,7 @@ pub async fn run_device(
                 let mut buf = [0u8; 33];
                 match reader.read_input_report(&mut buf[1..]).await {
                     Ok(_) => {
+                        log::info!("From {:x}:{:x} | {:?}", vendor_id, product_id, buf);
                         sender.send(buf).await.unwrap();
                     }
                     Err(_) => {

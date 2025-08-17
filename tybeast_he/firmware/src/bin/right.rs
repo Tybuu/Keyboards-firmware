@@ -13,6 +13,8 @@ use embassy_executor::Spawner;
 use embassy_futures::join::{join, join3};
 use embassy_rp::adc::{self, Adc, Channel, Config as AdcConfig};
 use embassy_rp::gpio::{Input, Pull};
+use embassy_rp::pio::Pio;
+use embassy_rp::pio_programs::ws2812::{PioWs2812, PioWs2812Program};
 use embassy_rp::{bind_interrupts, gpio, peripherals, usb};
 use embassy_time::Timer;
 
@@ -24,6 +26,7 @@ use key_lib::descriptor::{BufferReport, SlaveReport};
 use key_lib::keys::SlaveKeys;
 use key_lib::position::{DefaultSwitch, HeSwitch, KeySensors};
 use key_lib::NUM_KEYS;
+use tybeast_ones_he::indicator::SlaveIndicatorTask;
 use tybeast_ones_he::sensors::HallEffectSensors;
 use tybeast_ones_he::slave_com::HidSlaveTask;
 use usbd_hid::descriptor::SerializedDescriptor;
@@ -32,6 +35,7 @@ use {defmt_rtt as _, panic_probe as _};
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<peripherals::USB>;
     ADC_IRQ_FIFO => adc::InterruptHandler;
+    PIO0_IRQ_0 => embassy_rp::pio::InterruptHandler<peripherals::PIO0>;
 });
 
 #[embassy_executor::main]
@@ -118,6 +122,12 @@ async fn main(_spawner: Spawner) {
 
     let slave_hid_task = HidSlaveTask::new();
 
+    let Pio {
+        mut common, sm0, ..
+    } = Pio::new(p.PIO0, Irqs);
+    let program = PioWs2812Program::new(&mut common);
+    let ws2812 = PioWs2812::new(&mut common, sm0, p.DMA_CH1, p.PIN_17, &program);
+    let indicator_task = SlaveIndicatorTask::new(ws2812, slave_hid_task.chan());
     let mut keys = SlaveKeys::<HeSwitch, _, u32, _>::new(sensors, slave_hid_task.chan());
 
     // Main keyboard loop
@@ -127,7 +137,12 @@ async fn main(_spawner: Spawner) {
             Timer::after_micros(5).await;
         }
     };
-    join3(usb_fut, key_loop, slave_hid_task.run(slave_hid)).await;
+    join3(
+        usb_fut,
+        key_loop,
+        join(slave_hid_task.run(slave_hid), indicator_task.run()),
+    )
+    .await;
 }
 
 struct MyDeviceHandler {

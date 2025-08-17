@@ -1,4 +1,4 @@
-use core::{cell::RefCell, ops::DerefMut};
+use core::{array, cell::RefCell, ops::DerefMut};
 
 use embassy_futures::join::join;
 use embassy_sync::{
@@ -16,31 +16,63 @@ use key_lib::{
 
 const CHANNEL_SIZE: usize = 5;
 
-pub enum HidRequest {}
+pub enum HidRequest {
+    ConfigIndicate(u8),
+}
+
+impl HidRequest {
+    pub fn send_request(&self, buf: &mut [u8]) -> usize {
+        match *self {
+            HidRequest::ConfigIndicate(val) => {
+                buf[0] = 0;
+                buf[1] = val;
+                2
+            }
+        }
+    }
+
+    pub fn index(&self) -> usize {
+        match self {
+            Self::ConfigIndicate(_) => 0,
+        }
+    }
+
+    pub fn get_request(buf: &[u8]) -> Option<HidRequest> {
+        match buf[0] {
+            0 => Some(Self::ConfigIndicate(buf[1])),
+            _ => None,
+        }
+    }
+}
 
 impl MasterRequest for HidRequest {
     type SlaveRespone = HidResponse;
 }
 
 pub enum HidResponse {
-    None,
+    HallEffectReading(u16),
 }
 
 impl HidResponse {
-    pub async fn get_response<'d, T: Driver<'d>>(buf: &[u8]) -> HidResponse {
-        let slave_state = [buf[0], buf[1], buf[2], buf[3]];
-        let slave_state = u32::from_le_bytes(slave_state);
+    pub fn get_response(buf: &[u8]) -> Option<HidResponse> {
         match buf[0] {
-            0 => HidResponse::None,
-            _ => HidResponse::None,
+            0 => None,
+            _ => None,
         }
     }
 
-    pub async fn send_response<'d, T: Driver<'d>>(&self, buf: &mut [u8]) -> usize {
+    pub fn index(&self) -> usize {
+        match self {
+            HidResponse::HallEffectReading(_) => 1,
+        }
+    }
+
+    pub async fn send_response(&self, buf: &mut [u8]) -> usize {
         match *self {
-            HidResponse::None => {
+            HidResponse::HallEffectReading(val) => {
                 buf[0] = 0;
-                return 1;
+                buf[1..3].copy_from_slice(&val.to_le_bytes());
+                3
             }
         }
     }
@@ -53,7 +85,8 @@ impl SlaveRespone for HidResponse {
 pub struct HidMasterTask {
     slave_chan: Channel<ThreadModeRawMutex, u32, CHANNEL_SIZE>,
     requests: Channel<ThreadModeRawMutex, HidRequest, CHANNEL_SIZE>,
-    responses: Channel<ThreadModeRawMutex, HidResponse, CHANNEL_SIZE>,
+    responses: [Channel<ThreadModeRawMutex, HidResponse, CHANNEL_SIZE>;
+        core::mem::variant_count::<HidResponse>()],
 }
 
 #[allow(clippy::new_without_default)]
@@ -62,7 +95,7 @@ impl HidMasterTask {
         Self {
             slave_chan: Channel::new(),
             requests: Channel::new(),
-            responses: Channel::new(),
+            responses: array::from_fn(|_| Channel::new()),
         }
     }
 
@@ -70,7 +103,7 @@ impl HidMasterTask {
         HidMaster {
             slave_rec: self.slave_chan.receiver(),
             requests: self.requests.sender(),
-            responses: self.responses.receiver(),
+            responses: &self.responses,
         }
     }
 
@@ -79,15 +112,21 @@ impl HidMasterTask {
         let read_loop = async {
             loop {
                 let mut buf = [0u8; 32];
-                reader.read(&mut buf).await;
+                reader.read(&mut buf).await.unwrap();
                 let slave_state = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
                 self.slave_chan.send(slave_state).await;
+                if let Some(resp) = HidResponse::get_response(&buf[4..]) {
+                    self.responses[resp.index()].send(resp).await;
+                }
             }
         };
 
         let write_loop = async {
             loop {
-                let _ = self.requests.receive().await;
+                let mut rep = SlaveReport::default();
+                let req = self.requests.receive().await;
+                req.send_request(&mut rep.input);
+                writer.write_serialize(&rep).await.unwrap();
             }
         };
         join(read_loop, write_loop).await;
@@ -97,7 +136,18 @@ impl HidMasterTask {
 pub struct HidMaster<'ch> {
     slave_rec: Receiver<'ch, ThreadModeRawMutex, u32, CHANNEL_SIZE>,
     requests: Sender<'ch, ThreadModeRawMutex, HidRequest, CHANNEL_SIZE>,
-    responses: Receiver<'ch, ThreadModeRawMutex, HidResponse, CHANNEL_SIZE>,
+    responses: &'ch [Channel<ThreadModeRawMutex, HidResponse, CHANNEL_SIZE>;
+             core::mem::variant_count::<HidResponse>()],
+}
+
+impl<'ch> HidMaster<'ch> {
+    pub async fn get_response_copy(&self, resp: &mut HidResponse) {
+        *resp = self.responses[resp.index()].receive().await;
+    }
+
+    pub fn try_send_request(&self, request: HidRequest) {
+        self.requests.try_send(request);
+    }
 }
 
 impl<'ch> Master for HidMaster<'ch> {
@@ -112,7 +162,7 @@ impl<'ch> Master for HidMaster<'ch> {
     }
 
     async fn get_response(&self) -> Self::Response {
-        self.responses.receive().await
+        self.responses[0].receive().await
     }
 
     async fn get_slave_state(&self) -> Self::SlaveState {
@@ -125,7 +175,8 @@ impl<'ch> Master for HidMaster<'ch> {
 }
 
 pub struct HidSlaveTask {
-    requests: Channel<ThreadModeRawMutex, HidRequest, CHANNEL_SIZE>,
+    requests: [Channel<ThreadModeRawMutex, HidRequest, CHANNEL_SIZE>;
+        core::mem::variant_count::<HidRequest>()],
     responses: Channel<ThreadModeRawMutex, HidResponse, CHANNEL_SIZE>,
     slave_state: Channel<ThreadModeRawMutex, u32, CHANNEL_SIZE>,
 }
@@ -134,7 +185,7 @@ pub struct HidSlaveTask {
 impl HidSlaveTask {
     pub fn new() -> Self {
         Self {
-            requests: Channel::new(),
+            requests: array::from_fn(|_| Channel::new()),
             responses: Channel::new(),
             slave_state: Channel::new(),
         }
@@ -142,7 +193,7 @@ impl HidSlaveTask {
 
     pub fn chan(&self) -> HidSlave<'_> {
         HidSlave {
-            requests: self.requests.receiver(),
+            requests: &self.requests,
             responses: self.responses.sender(),
             slave_state: self.slave_state.sender(),
         }
@@ -154,11 +205,13 @@ impl HidSlaveTask {
             loop {
                 let mut buf = [0u8; 32];
                 reader.read(&mut buf).await.unwrap();
+                if let Some(req) = HidRequest::get_request(&buf) {
+                    self.requests[req.index()].send(req).await;
+                }
             }
         };
 
         let write_loop = async {
-            let prev_slave_state = 0;
             loop {
                 let mut slave_report = SlaveReport::default();
                 let slave_state = self.slave_state.receive().await;
@@ -171,9 +224,16 @@ impl HidSlaveTask {
 }
 
 pub struct HidSlave<'ch> {
-    requests: Receiver<'ch, ThreadModeRawMutex, HidRequest, CHANNEL_SIZE>,
+    requests: &'ch [Channel<ThreadModeRawMutex, HidRequest, CHANNEL_SIZE>;
+             core::mem::variant_count::<HidRequest>()],
     responses: Sender<'ch, ThreadModeRawMutex, HidResponse, CHANNEL_SIZE>,
     slave_state: Sender<'ch, ThreadModeRawMutex, u32, CHANNEL_SIZE>,
+}
+
+impl<'ch> HidSlave<'ch> {
+    pub async fn get_request_ref(&self, req: &mut HidRequest) {
+        *req = self.requests[req.index()].receive().await;
+    }
 }
 
 impl<'ch> Slave for HidSlave<'ch> {
@@ -188,7 +248,7 @@ impl<'ch> Slave for HidSlave<'ch> {
     }
 
     async fn get_request(&self) -> Self::Request {
-        self.requests.receive().await
+        self.requests[0].receive().await
     }
 
     async fn send_slave_state(&self, state: Self::SlaveState) {
