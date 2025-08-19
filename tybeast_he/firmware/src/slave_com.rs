@@ -18,14 +18,20 @@ const CHANNEL_SIZE: usize = 5;
 
 pub enum HidRequest {
     ConfigIndicate(u8),
+    HallEffectReading(u8),
 }
 
 impl HidRequest {
     pub fn send_request(&self, buf: &mut [u8]) -> usize {
         match *self {
             HidRequest::ConfigIndicate(val) => {
-                buf[0] = 0;
+                buf[0] = self.index() as u8;
                 buf[1] = val;
+                2
+            }
+            HidRequest::HallEffectReading(i) => {
+                buf[0] = self.index() as u8;
+                buf[1] = i;
                 2
             }
         }
@@ -34,12 +40,14 @@ impl HidRequest {
     pub fn index(&self) -> usize {
         match self {
             Self::ConfigIndicate(_) => 0,
+            Self::HallEffectReading(_) => 1,
         }
     }
 
     pub fn get_request(buf: &[u8]) -> Option<HidRequest> {
         match buf[0] {
             0 => Some(Self::ConfigIndicate(buf[1])),
+            1 => Some(Self::HallEffectReading(buf[1])),
             _ => None,
         }
     }
@@ -55,13 +63,18 @@ pub enum HidResponse {
 
 impl HidResponse {
     pub fn get_response(buf: &[u8]) -> Option<HidResponse> {
+        const HALL_INDEX: u8 = HidResponse::HallEffectReading(0).index() as u8;
         match buf[0] {
             0 => None,
+            HALL_INDEX => {
+                let reading = u16::from_le_bytes([buf[1], buf[2]]);
+                Some(HidResponse::HallEffectReading(reading))
+            }
             _ => None,
         }
     }
 
-    pub fn index(&self) -> usize {
+    pub const fn index(&self) -> usize {
         match self {
             HidResponse::HallEffectReading(_) => 1,
         }
@@ -70,7 +83,7 @@ impl HidResponse {
     pub async fn send_response(&self, buf: &mut [u8]) -> usize {
         match *self {
             HidResponse::HallEffectReading(val) => {
-                buf[0] = 0;
+                buf[0] = self.index() as u8;
                 buf[1..3].copy_from_slice(&val.to_le_bytes());
                 3
             }
