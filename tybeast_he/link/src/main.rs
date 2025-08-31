@@ -2,8 +2,6 @@ use std::future;
 
 use async_hid::{AsyncHidRead, AsyncHidWrite, Device, DeviceId, DeviceReader, DeviceWriter};
 use async_hid::{DeviceInfo, HidBackend, HidResult};
-use futures::future::select_all;
-use futures::Stream;
 use futures::StreamExt;
 use tokio::join;
 use tokio::sync::mpsc::{self, Receiver, Sender};

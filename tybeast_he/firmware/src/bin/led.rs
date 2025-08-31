@@ -12,6 +12,7 @@ use embassy_rp::{bind_interrupts, peripherals, usb};
 use embassy_rp::usb::Driver;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
+use embassy_time::Timer;
 use embassy_usb::class::hid::{HidReaderWriter, HidWriter, State};
 use embassy_usb::{Builder, Config, Handler};
 use key_lib::descriptor::{BufferReport, KeyboardReportNKRO, MouseReport, SlaveReport};
@@ -100,7 +101,19 @@ async fn main(_spawner: Spawner) {
     let mut usb = builder.build();
     let usb_fut = usb.run();
 
-    usb_fut.await;
+    let key_loop = async {
+        loop {
+            let mut slave_report = SlaveReport::default();
+            slave_report.input[0] = 0x69;
+            slave_hid.ready().await;
+            info!("HID endpoint enabled!");
+            slave_hid.write_serialize(&slave_report).await;
+            info!("Wrote slave report!");
+            Timer::after_millis(500).await;
+        }
+    };
+
+    join(usb_fut, key_loop).await;
 }
 
 struct MyDeviceHandler<'d> {

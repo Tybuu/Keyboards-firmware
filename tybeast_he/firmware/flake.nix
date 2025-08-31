@@ -1,6 +1,6 @@
 {
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs";
+    nixpkgs.url = "github:NixOS/nixpkgs/25.05";
     rust-overlay.url = "github:oxalica/rust-overlay";
   };
 

@@ -246,12 +246,16 @@ impl<'a, const N: usize> Value<'a> for ScanCodeLayerStorage<N> {
         let mut codes = Self::default();
         let mut buf_i = 0;
         let mut code_i = 0;
-        while buf_i < buffer.len() {
+        while buf_i < buffer.len() && code_i < N {
             let code = ScanCodeBehavior::deserialize_from(&buffer[buf_i..])?;
             codes.codes[code_i] = code;
             buf_i += code.into_buffer_len();
             code_i += 1;
         }
-        Ok(codes)
+        if code_i != N || buf_i != buffer.len() {
+            Err(sequential_storage::map::SerializationError::InvalidFormat)
+        } else {
+            Ok(codes)
+        }
     }
 }

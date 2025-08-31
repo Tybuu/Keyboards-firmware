@@ -31,7 +31,7 @@ pub enum StorageKey {
 }
 
 impl StorageKey {
-    fn to_key(&self) -> InternalStorageKey {
+    pub fn to_key(&self) -> InternalStorageKey {
         const SCAN_CODE_OFFSET: InternalStorageKey = 100;
         match self {
             StorageKey::StorageCheck => 0 as InternalStorageKey,

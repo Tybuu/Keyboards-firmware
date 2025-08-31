@@ -32,20 +32,18 @@ enum PressResult {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct Keys<K: KeyState, I: ConfigIndicator> {
+pub struct Keys<I: ConfigIndicator> {
     codes: [[ScanCodeBehavior; NUM_LAYERS]; NUM_KEYS],
-    key_states: [K; NUM_KEYS],
     indicator: Option<I>,
     pub current_layer: [Option<usize>; NUM_KEYS],
     pub config_num: usize,
 }
 
-impl<K: KeyState, I: ConfigIndicator> Keys<K, I> {
+impl<I: ConfigIndicator> Keys<I> {
     /// Returns a Keys struct
     pub const fn default() -> Self {
         Self {
             codes: [[ScanCodeBehavior::default(); NUM_LAYERS]; NUM_KEYS],
-            key_states: [K::DEFAULT; NUM_KEYS],
             indicator: None,
             current_layer: [None; NUM_KEYS],
             config_num: 0,
@@ -56,46 +54,37 @@ impl<K: KeyState, I: ConfigIndicator> Keys<K, I> {
         self.indicator = Some(indicator);
     }
 
-    pub fn set_position_type_ranged(&mut self, range: Range<usize>, switch_type: K) {
-        self.key_states[range].fill(switch_type);
-    }
+    // pub fn set_position_type_ranged(&mut self, range: Range<usize>, switch_type: K) {
+    //     self.key_states[range].fill(switch_type);
+    // }
 
-    pub fn get_pressed(&self, index: usize) -> bool {
-        self.key_states[index].is_pressed()
-    }
+    // pub fn get_pressed(&self, index: usize) -> bool {
+    //     self.key_states[index].is_pressed()
+    // }
 
     pub fn set_code(&mut self, code: ScanCodeBehavior, index: usize, layer: usize) {
         self.codes[index][layer] = code;
     }
 
-    pub async fn update_positions(&mut self, sensors: &mut impl KeySensors<Item = K::Item>) {
-        sensors.update_positions(&mut self.key_states).await;
-    }
+    // pub async fn update_positions(&mut self, sensors: &mut impl KeySensors<Item = K::Item>) {
+    //     sensors.update_positions(&mut self.key_states).await;
+    // }
 
-    #[cfg(feature = "hall-effect")]
-    pub async fn setup_positions(&mut self, sensors: &mut impl KeySensors<Item = K::Item>) {
-        sensors.setup(&mut self.key_states).await;
-    }
-
-    /// Returns the indexes of all the keys that are pressed to the vec
-    pub fn is_pressed(&self, vec: &mut Vec<usize, NUM_KEYS>) {
-        vec.extend(
-            self.key_states
-                .iter()
-                .enumerate()
-                .filter_map(|(i, pos)| if pos.is_pressed() { Some(i) } else { None }),
-        );
-    }
+    // #[cfg(feature = "hall-effect")]
+    // pub async fn setup_positions(&mut self, sensors: &mut impl KeySensors<Item = K::Item>) {
+    //     sensors.setup(&mut self.key_states).await;
+    // }
 
     /// Pushes the resulting ScanResult onto the provided vec depending on the indexed key's
     /// position. Returns true if a key was pushed into the provided index set
-    async fn get_pressed_code(
+    async fn get_pressed_code<K: KeyState>(
         &mut self,
         index: usize,
         layer: usize,
+        states: &[K; NUM_KEYS],
         set: &mut Vec<ReportCodes, 64>,
     ) -> PressResult {
-        let pressed = self.key_states[index].is_pressed();
+        let pressed = states[index].is_pressed();
         match self.codes[index][layer] {
             ScanCodeBehavior::Single(code) => {
                 if pressed {
@@ -131,7 +120,7 @@ impl<K: KeyState, I: ConfigIndicator> Keys<K, I> {
             } => {
                 if pressed {
                     set.push(ReportCodes::Sticky).unwrap();
-                    if self.key_states[other_index].is_pressed() {
+                    if states[other_index].is_pressed() {
                         set.push(other_key_code.into()).unwrap();
                         PressResult::Pressed
                     } else {
@@ -157,16 +146,20 @@ impl<K: KeyState, I: ConfigIndicator> Keys<K, I> {
     /// the passed in vector. The passed in vector should be empty.
     /// Note that if a key is held, it will ignore the passed in layer and use the
     /// previous layer it's holding
-    pub async fn get_keys(&mut self, layer: usize, set: &mut Vec<ReportCodes, 64>) {
+    pub async fn get_keys<K: KeyState>(
+        &mut self,
+        layer: usize,
+        set: &mut Vec<ReportCodes, 64>,
+        states: &[K; NUM_KEYS],
+    ) {
         for i in 0..NUM_KEYS {
             let layer = match self.current_layer[i] {
                 Some(num) => num,
                 None => layer,
             };
-            match self.get_pressed_code(i, layer, set).await {
+            match self.get_pressed_code(i, layer, states, set).await {
                 PressResult::Function => {
                     set.clear();
-                    self.key_states.iter_mut().for_each(|s| s.reset());
                     self.current_layer.fill(None);
                     // Slight delay so user can have time to release the key activating the
                     // function so the function doesn't activate again
@@ -236,6 +229,7 @@ impl<K: KeyState, I: ConfigIndicator> Keys<K, I> {
                     }
                     _ => {
                         error!("Invalid key stored at {}", storage_key);
+                        *self = Keys::default();
                         return Err(());
                     }
                 },

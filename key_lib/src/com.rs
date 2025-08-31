@@ -10,7 +10,6 @@ use embassy_usb::driver::Driver;
 use crate::keys::{ConfigIndicator, Keys};
 
 use crate::descriptor::BufferReport;
-use crate::position::KeyState;
 use crate::{IS_SPLIT, NUM_CONFIGS, NUM_KEYS, NUM_LAYERS};
 
 const BUFFER_SIZE: usize = 32;
@@ -135,15 +134,15 @@ impl From<u8> for HidRequest {
         }
     }
 }
-pub struct Com<'a, 'd, M: RawMutex, T: Driver<'d>, K: KeyState, I: ConfigIndicator> {
-    keys: &'a Mutex<M, Keys<K, I>>,
+pub struct Com<'a, 'd, M: RawMutex, T: Driver<'d>, I: ConfigIndicator> {
+    keys: &'a Mutex<M, Keys<I>>,
     reader: ContinuousReader<'d, T>,
     writer: ContinuousWriter<'d, T>,
 }
 
-impl<'a, 'd, M: RawMutex, T: Driver<'d>, K: KeyState, I: ConfigIndicator> Com<'a, 'd, M, T, K, I> {
+impl<'a, 'd, M: RawMutex, T: Driver<'d>, I: ConfigIndicator> Com<'a, 'd, M, T, I> {
     pub fn new(
-        keys: &'a Mutex<M, Keys<K, I>>,
+        keys: &'a Mutex<M, Keys<I>>,
         reader: HidReader<'d, T, BUFFER_SIZE>,
         writer: HidWriter<'d, T, BUFFER_SIZE>,
     ) -> Self {
@@ -155,6 +154,7 @@ impl<'a, 'd, M: RawMutex, T: Driver<'d>, K: KeyState, I: ConfigIndicator> Com<'a
     }
 
     pub async fn com_loop(&mut self) -> ! {
+        self.reader.reader.ready().await;
         loop {
             let hid_request = self.reader.pop().await.into();
             match hid_request {
@@ -211,9 +211,6 @@ impl<'a, 'd, M: RawMutex, T: Driver<'d>, K: KeyState, I: ConfigIndicator> Com<'a
                         keys.load_keys_from_com(&mut self.reader, config_num)
                             .await
                             .unwrap();
-                        if config_num == 0 {
-                            info!("Buffer len: {}", self.reader.buffer_len);
-                        }
                         info!("Succesfully loaded config {}!", config_num);
                         keys.write_keys_to_storage(config_num).await;
                     }

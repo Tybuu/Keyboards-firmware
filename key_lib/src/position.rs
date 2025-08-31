@@ -291,6 +291,7 @@ impl KeyState for WootingPosition {
     fn reset(&mut self) {
         self.buffer.fill(self.highest_point);
         self.pressed = false;
+        self.wooting = false;
         self.buffer_pos = 0;
     }
 }

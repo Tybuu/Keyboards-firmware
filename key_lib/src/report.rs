@@ -1,8 +1,10 @@
 use defmt::info;
+use embassy_sync::{blocking_mutex::raw::RawMutex, mutex::Mutex};
 use embassy_time::{Duration, Instant};
 use heapless::Vec;
 
 use crate::{
+    NUM_KEYS,
     descriptor::{KeyboardReportNKRO, MouseReport},
     keys::{ConfigIndicator, Keys},
     position::{KeySensors, KeyState},
@@ -88,7 +90,7 @@ impl MouseDelta {
     }
 }
 
-pub struct Report<S: KeySensors> {
+pub struct Report<S: KeySensors, K: KeyState<Item = S::Item>> {
     key_report: KeyboardReportNKRO,
     mouse_report: MouseReport,
     mouse_delta: MouseDelta,
@@ -97,9 +99,10 @@ pub struct Report<S: KeySensors> {
     reset_layer: usize,
     stick: State,
     sensors: S,
+    positions: [K; NUM_KEYS],
 }
 
-impl<S: KeySensors> Report<S> {
+impl<S: KeySensors, K: KeyState<Item = S::Item>> Report<S, K> {
     pub fn new(sensors: S) -> Self {
         Self {
             key_report: KeyboardReportNKRO::default(),
@@ -110,14 +113,15 @@ impl<S: KeySensors> Report<S> {
             reset_layer: 0,
             stick: State::None,
             sensors,
+            positions: [K::DEFAULT; NUM_KEYS],
         }
     }
 
     /// Generates a report with the provided keys. Returns a option tuple
     /// where it returns a Some when a report need to be sent
-    pub async fn generate_report<K: KeyState<Item = S::Item>, I: ConfigIndicator>(
+    pub async fn generate_report<M: RawMutex, I: ConfigIndicator>(
         &mut self,
-        keys: &mut Keys<K, I>,
+        keys: &Mutex<M, Keys<I>>,
     ) -> (Option<&KeyboardReportNKRO>, Option<&MouseReport>) {
         let mut new_layer = None;
         let mut pressed_keys = Vec::<ReportCodes, 64>::new();
@@ -126,10 +130,11 @@ impl<S: KeySensors> Report<S> {
         let mut pressed = false;
         let mut stick = false;
         let mut toggle = false;
-
-        keys.update_positions(&mut self.sensors).await;
-
-        keys.get_keys(self.current_layer, &mut pressed_keys).await;
+        self.sensors.update_positions(&mut self.positions).await;
+        let mut keys = keys.lock().await;
+        keys.get_keys(self.current_layer, &mut pressed_keys, &self.positions)
+            .await;
+        drop(keys);
         for key in &pressed_keys {
             match key {
                 ReportCodes::Modifier(code) => {
