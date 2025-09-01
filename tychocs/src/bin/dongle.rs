@@ -5,18 +5,22 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use bruh78::{
     key_config::set_keys,
-    radio::{self, Addresses, Radio},
+    radio::{self, Addresses, Radio, RadioClient},
     sensors::DongleSensors,
 };
+use cortex_m_rt::entry;
 use defmt::{info, *};
-use embassy_executor::Spawner;
+use embassy_executor::{Executor, InterruptExecutor};
 use embassy_futures::join::{join, join3, join4};
 use embassy_nrf::{
     bind_interrupts,
     config::HfclkSource,
-    peripherals::{self, USBD},
+    interrupt,
+    interrupt::InterruptExt,
+    peripherals::{self},
     qspi::Qspi,
     usb::{self, vbus_detect::HardwareVbusDetect, Driver},
+    Peri,
 };
 
 use defmt_rtt as _; // global logger
@@ -45,6 +49,9 @@ static KEYS: Mutex<ThreadModeRawMutex, Keys<Indicator>> = Mutex::new(Keys::defau
 
 static CACHE: StaticCell<NoCache> = StaticCell::new();
 
+static RADIO_EXECUTOR: InterruptExecutor = InterruptExecutor::new();
+static THREAD_EXECUTOR: StaticCell<Executor> = StaticCell::new();
+
 bind_interrupts!(struct Irqs {
     USBD => usb::InterruptHandler<peripherals::USBD>;
     CLOCK_POWER => usb::vbus_detect::InterruptHandler;
@@ -57,13 +64,21 @@ async fn storage_task(storage: Storage<Qspi<'static, peripherals::QSPI>, NoCache
     storage.run_storage().await;
 }
 
-#[embassy_executor::main]
-async fn main(spawner: Spawner) {
-    let mut nrf_config = embassy_nrf::config::Config::default();
-    nrf_config.hfclk_source = HfclkSource::ExternalXtal;
-    let p = embassy_nrf::init(nrf_config);
+#[embassy_executor::task]
+async fn radio_task(radio: Peri<'static, peripherals::RADIO>) {
+    let addresses = Addresses::default();
+    let mut radio = Radio::new(radio, Irqs, addresses);
+    radio.set_tx_addresses(|w| w.set_txaddress(0));
+    radio.set_rx_addresses(|w| {
+        w.set_addr1(true);
+        w.set_addr2(true);
+    });
+    radio.run().await;
+}
 
-    let driver = Driver::new(p.USBD, Irqs, HardwareVbusDetect::new(Irqs));
+#[embassy_executor::task]
+async fn thread_task(usbd: Peri<'static, peripherals::USBD>) {
+    let driver = Driver::new(usbd, Irqs, HardwareVbusDetect::new(Irqs));
 
     // Create embassy-usb Config
     let mut config = embassy_usb::Config::new(0xa55, 0xa44);
@@ -126,40 +141,8 @@ async fn main(spawner: Spawner) {
     let mut usb = builder.build();
     let usb_fut = usb.run();
 
-    let cache = CACHE.init_with(NoCache::new);
-    let mut qspi_config = embassy_nrf::qspi::Config::default();
-    qspi_config.sck_delay = 5;
-    qspi_config.read_opcode = embassy_nrf::qspi::ReadOpcode::READ4O;
-    qspi_config.write_opcode = embassy_nrf::qspi::WriteOpcode::PP4O;
-    qspi_config.frequency = embassy_nrf::qspi::Frequency::M32;
-    qspi_config.address_mode = embassy_nrf::qspi::AddressMode::_24BIT;
-    qspi_config.capacity = 0x200000;
-
-    // let qspi_flash = Qspi::new(
-    //     p.QSPI,
-    //     Irqs,
-    //     p.P0_21,
-    //     p.P0_25,
-    //     p.P0_20,
-    //     p.P0_24,
-    //     p.P0_22,
-    //     p.P0_23,
-    //     qspi_config,
-    // );
-    //
-    // let storage = Storage::init(qspi_flash, 0..(4096 * 5), cache).await;
-    // spawner.spawn(storage_task(storage)).unwrap();
-
-    let addresses = Addresses::default();
-
-    let mut radio = Radio::new(p.RADIO, Irqs, addresses);
-    radio.set_tx_addresses(|w| w.set_txaddress(0));
-    radio.set_rx_addresses(|w| {
-        w.set_addr1(true);
-        w.set_addr2(true);
-    });
-
-    let sensors = DongleSensors {};
+    let radio = RadioClient {};
+    let sensors = DongleSensors::new(&radio);
     let mut report: Report<_, DefaultSwitch> = Report::new(sensors);
 
     let mut keys = KEYS.lock().await;
@@ -189,7 +172,27 @@ async fn main(spawner: Spawner) {
             Timer::after_micros(5).await;
         }
     };
-    join4(usb_fut, key_loop, com.com_loop(), radio.run_receive()).await;
+    join3(usb_fut, key_loop, com.com_loop()).await;
+}
+
+#[interrupt]
+unsafe fn EGU1_SWI1() {
+    RADIO_EXECUTOR.on_interrupt()
+}
+
+#[entry]
+fn main() -> ! {
+    let mut nrf_config = embassy_nrf::config::Config::default();
+    nrf_config.hfclk_source = HfclkSource::ExternalXtal;
+    let p = embassy_nrf::init(nrf_config);
+
+    embassy_nrf::interrupt::EGU1_SWI1.set_priority(embassy_nrf::interrupt::Priority::P6);
+    let spawner = RADIO_EXECUTOR.start(embassy_nrf::interrupt::EGU1_SWI1);
+    spawner.spawn(radio_task(p.RADIO)).unwrap();
+    let exectuor = THREAD_EXECUTOR.init_with(Executor::new);
+    exectuor.run(|spawner| {
+        spawner.spawn(thread_task(p.USBD)).unwrap();
+    });
 }
 
 struct Indicator {}
