@@ -25,11 +25,12 @@ use embassy_sync::{
     waitqueue::AtomicWaker,
 };
 use embassy_time::Timer;
+use num_enum::{TryFromPrimitive, TryFromPrimitiveError};
 
 use crate::{DONGLE_ADDRESS, DONGLE_PREFIX, KEYBOARD_ADDRESS, LEFT_PREFIX, RIGHT_PREFIX};
 
 const BUFFER_SIZE: usize = 32;
-const META_SIZE: usize = 2;
+const META_SIZE: usize = 3;
 
 static STATE: AtomicWaker = AtomicWaker::new();
 
@@ -70,7 +71,7 @@ impl Default for Addresses {
 
 pub struct Radio<'d> {
     _radio: Peri<'d, embassy_nrf::peripherals::RADIO>,
-    tx_addreses: u32,
+    tx_addreses: u8,
     rx_addresses: u32,
     rx_id: [u8; 8],
     tx_id: u8,
@@ -96,9 +97,9 @@ impl<'d> Radio<'d> {
         r.pcnf0().write(|w| {
             w.set_lflen(8);
             w.set_s0len(false);
-            w.set_s1len(8);
+            w.set_s1len(0);
             w.set_s1incl(embassy_nrf::pac::radio::vals::S1incl::AUTOMATIC);
-            w.set_plen(embassy_nrf::pac::radio::vals::Plen::_16BIT);
+            w.set_plen(embassy_nrf::pac::radio::vals::Plen::_8BIT);
         });
 
         r.pcnf1().write(|w| {
@@ -147,23 +148,33 @@ impl<'d> Radio<'d> {
         }
     }
 
-    async fn transmit_ack(&mut self) {
+    async fn transmit_ack(&mut self, id: u8) {
         let r = embassy_nrf::pac::RADIO;
         let mut packet = Packet::default();
+        packet.set_type(PacketType::Ack);
         packet.set_len(1);
-        r.packetptr().write_value(packet.as_ptr() as u32);
+        packet.set_id(id);
+        r.packetptr().write_value(packet.buffer.as_ptr() as u32);
         self.send_inner().await;
     }
 
-    async fn await_ack(&mut self, addr: u8) -> Result<(), ()> {
+    async fn await_ack(&mut self, id: u8) -> Result<(), ()> {
         let r = embassy_nrf::pac::RADIO;
         let mut packet = Packet::default();
-        packet.set_len(1);
-        r.rxaddresses().write(|w| w.0 = 1 << addr);
-        r.packetptr().write_value(packet.as_mut_ptr() as u32);
-        match select(Timer::after_micros(150), self.receive_inner()).await {
+        r.packetptr().write_value(packet.buffer.as_mut_ptr() as u32);
+        let receive_task = async {
+            loop {
+                if self.receive_inner().await.is_ok()
+                    && packet.packet_type().unwrap() == PacketType::Ack
+                    && packet.id() == id
+                {
+                    break;
+                };
+            }
+        };
+        match select(Timer::after_micros(300), receive_task).await {
             embassy_futures::select::Either::First(_) => Err(()),
-            embassy_futures::select::Either::Second(res) => res,
+            embassy_futures::select::Either::Second(_) => Ok(()),
         }
     }
 
@@ -171,31 +182,32 @@ impl<'d> Radio<'d> {
         let r = embassy_nrf::pac::RADIO;
         self.tx_id = self.tx_id.wrapping_add(1);
         packet.set_id(self.tx_id);
-        loop {
+        packet.set_type(PacketType::Data);
+        for _ in 0..3 {
             r.packetptr().write_value(packet.buffer.as_ptr() as u32);
             self.send_inner().await;
-            if self.await_ack(addr).await.is_ok() {
-                r.rxaddresses().write(|w| w.0 = self.rx_addresses);
+            if self.await_ack(packet.id()).await.is_ok() {
                 return;
             }
         }
     }
 
-    async fn receive(&mut self, packet: &mut Packet) -> u8 {
+    async fn receive(&mut self, packet: &mut Packet) {
         let r = embassy_nrf::pac::RADIO;
         loop {
             r.packetptr().write_value(packet.buffer.as_mut_ptr() as u32);
             let res = self.receive_inner().await;
-            if res.is_ok() {
+            if res.is_ok() && packet.packet_type().unwrap() == PacketType::Data {
                 let addr = r.rxmatch().read().rxmatch();
-                self.transmit_ack().await;
+                self.transmit_ack(packet.id()).await;
 
                 // If packet_id is the same as the previous id, it must mean that the ack hasn't
                 // gone through so we'll discard the packet on the receiving end but send another
                 // ack to make sure the tx side knows the packet was already received
                 if packet.id() != self.rx_id[addr as usize] {
                     self.rx_id[addr as usize] = packet.id();
-                    return addr;
+                    packet.addr = addr;
+                    return;
                 }
             }
         }
@@ -244,7 +256,7 @@ impl<'d> Radio<'d> {
     pub fn set_tx_addresses(&mut self, f: impl FnOnce(&mut Txaddress)) {
         let r = embassy_nrf::pac::RADIO;
         r.txaddress().write(f);
-        self.tx_addreses = r.txaddress().read().0;
+        self.tx_addreses = r.txaddress().read().txaddress();
     }
 
     pub fn set_rx_addresses(&mut self, f: impl FnOnce(&mut Rxaddresses)) {
@@ -258,10 +270,11 @@ impl<'d> Radio<'d> {
             let mut pipe = TO_SINGLETON.receive().await;
             match pipe.direction {
                 Direction::Tx => {
-                    self.send(&mut pipe.packet, pipe.address).await;
+                    let addr = pipe.packet.addr;
+                    self.send(&mut pipe.packet, addr).await;
                 }
                 Direction::Rx => {
-                    pipe.address = self.receive(&mut pipe.packet).await;
+                    self.receive(&mut pipe.packet).await;
                     FROM_SINGLETON.signal(pipe);
                 }
             }
@@ -324,7 +337,6 @@ enum Direction {
 pub struct Pipe<'a> {
     packet: MutexGuard<'a, CriticalSectionRawMutex, Packet>,
     direction: Direction,
-    address: u8,
 }
 
 pub struct RadioClient {}
@@ -338,51 +350,59 @@ impl RadioClient {
 
     pub async fn send_packet(
         &self,
-        packet: MutexGuard<'static, CriticalSectionRawMutex, Packet>,
+        mut packet: MutexGuard<'static, CriticalSectionRawMutex, Packet>,
         address: u8,
     ) {
+        packet.addr = address;
         let pipe = Pipe {
             packet,
             direction: Direction::Tx,
-            address,
         };
         TO_SINGLETON.send(pipe).await;
     }
-    pub async fn receive_packet(
-        &self,
-    ) -> (MutexGuard<'static, CriticalSectionRawMutex, Packet>, u8) {
+    pub async fn receive_packet(&self) -> MutexGuard<'static, CriticalSectionRawMutex, Packet> {
         let packet = DATA.lock().await;
         let pipe = Pipe {
             packet,
             direction: Direction::Rx,
-            address: 0,
         };
         TO_SINGLETON.send(pipe).await;
         let res = FROM_SINGLETON.wait().await;
-        (res.packet, res.address)
+        res.packet
     }
 }
 
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq, TryFromPrimitive)]
+enum PacketType {
+    Data,
+    Ack,
+}
+
 pub struct Packet {
+    pub addr: u8,
     buffer: [u8; BUFFER_SIZE + META_SIZE],
 }
 
 impl Packet {
     const LEN_INDEX: usize = 0;
     const ID_INDEX: usize = 1;
+    const TYPE_INDEX: usize = 2;
 
     pub const fn default() -> Self {
         Self {
-            buffer: [0u8; BUFFER_SIZE + META_SIZE],
+            addr: 0,
+            buffer: [(META_SIZE - 1) as u8; BUFFER_SIZE + META_SIZE],
         }
     }
 
     pub fn len(&self) -> usize {
-        self.buffer[Self::LEN_INDEX] as usize
+        // Subtract META_SIZE by 1 for len as len field doesn't count the len byte
+        self.buffer[Self::LEN_INDEX] as usize - (META_SIZE - 1)
     }
 
     pub fn set_len(&mut self, len: usize) {
-        self.buffer[Self::LEN_INDEX] = len as u8;
+        self.buffer[Self::LEN_INDEX] = (META_SIZE - 1) as u8 + len as u8;
     }
 
     pub fn id(&self) -> u8 {
@@ -391,6 +411,14 @@ impl Packet {
 
     pub fn set_id(&mut self, id: u8) {
         self.buffer[Self::ID_INDEX] = id;
+    }
+
+    pub fn packet_type(&self) -> Result<PacketType, TryFromPrimitiveError<PacketType>> {
+        self.buffer[Self::TYPE_INDEX].try_into()
+    }
+
+    pub fn set_type(&mut self, packet_type: PacketType) {
+        self.buffer[Self::TYPE_INDEX] = packet_type as u8;
     }
 
     pub fn copy_from_slice(&mut self, src: &[u8]) {

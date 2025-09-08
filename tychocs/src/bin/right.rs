@@ -49,8 +49,7 @@ async fn radio_task(r: RadioResources) {
     let mut radio = Radio::new(r.rad, Irqs, addresses);
     radio.set_tx_addresses(|w| w.set_txaddress(2));
     radio.set_rx_addresses(|w| {
-        w.set_addr1(true);
-        w.set_addr2(true);
+        w.set_addr0(true);
     });
     radio.run().await;
 }

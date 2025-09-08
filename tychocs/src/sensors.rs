@@ -162,8 +162,9 @@ impl<'a> KeySensors for DongleSensors<'a> {
         positions: &mut [K],
     ) {
         const OFFSET: usize = NUM_KEYS / 2;
-        let (states, addr) = self.rad.receive_packet().await;
+        let states = self.rad.receive_packet().await;
         let key_states = u32::from_le_bytes(states[0..4].try_into().unwrap());
+        let addr = states.addr;
         drop(states);
         if addr == 1 {
             positions[..OFFSET]
