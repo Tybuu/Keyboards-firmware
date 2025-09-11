@@ -56,7 +56,7 @@ bind_interrupts!(struct Irqs {
     USBD => usb::InterruptHandler<peripherals::USBD>;
     CLOCK_POWER => usb::vbus_detect::InterruptHandler;
     RADIO  => radio::InterruptHandler;
-    QSPI => embassy_nrf::qspi::InterruptHandler<peripherals::QSPI>;
+    // QSPI => embassy_nrf::qspi::InterruptHandler<peripherals::QSPI>;
 });
 
 #[embassy_executor::task]
@@ -117,13 +117,13 @@ async fn thread_task(usbd: Peri<'static, peripherals::USBD>) {
         report_descriptor: KeyboardReportNKRO::desc(),
         request_handler: None,
         poll_ms: 1,
-        max_packet_size: 29,
+        max_packet_size: 32,
     };
     let com_config = embassy_usb::class::hid::Config {
         report_descriptor: BufferReport::desc(),
         request_handler: None,
         poll_ms: 1,
-        max_packet_size: 32,
+        max_packet_size: 64,
     };
     let mouse_config = embassy_usb::class::hid::Config {
         report_descriptor: MouseReport::desc(),
@@ -132,7 +132,7 @@ async fn thread_task(usbd: Peri<'static, peripherals::USBD>) {
         max_packet_size: 5,
     };
     builder.handler(&mut device_handler);
-    let mut key_writer = HidWriter::<_, 29>::new(&mut builder, &mut key_state, key_config);
+    let mut key_writer = HidWriter::<_, 32>::new(&mut builder, &mut key_state, key_config);
     let (com_reader, com_writer) =
         HidReaderWriter::<_, 32, 32>::new(&mut builder, &mut com_state, com_config).split();
     let mut mouse_writer = HidWriter::<_, 5>::new(&mut builder, &mut mouse_state, mouse_config);
@@ -186,7 +186,10 @@ fn main() -> ! {
     nrf_config.hfclk_source = HfclkSource::ExternalXtal;
     let p = embassy_nrf::init(nrf_config);
 
-    embassy_nrf::interrupt::EGU1_SWI1.set_priority(embassy_nrf::interrupt::Priority::P6);
+    embassy_nrf::interrupt::EGU1_SWI1.set_priority(embassy_nrf::interrupt::Priority::P1);
+    embassy_nrf::interrupt::RADIO.set_priority(embassy_nrf::interrupt::Priority::P0);
+    embassy_nrf::interrupt::USBD.set_priority(embassy_nrf::interrupt::Priority::P2);
+    embassy_nrf::interrupt::CLOCK_POWER.set_priority(embassy_nrf::interrupt::Priority::P2);
     let spawner = RADIO_EXECUTOR.start(embassy_nrf::interrupt::EGU1_SWI1);
     spawner.spawn(radio_task(p.RADIO)).unwrap();
     let exectuor = THREAD_EXECUTOR.init_with(Executor::new);

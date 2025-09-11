@@ -1,29 +1,41 @@
-//! This example test the RP Pico on board LED.
-//!
-//! It does not work with the RP Pico W board. See wifi_blinky.rs.
-
 #![no_std]
 #![no_main]
 
-use assign_resources::assign_resources;
-use bruh78::radio::{self, Addresses, Packet, Radio, RadioClient};
-use bruh78::sensors::Matrix;
-use cortex_m_rt::entry;
-use embassy_executor::{Executor, InterruptExecutor, Spawner};
-use embassy_nrf::config::HfclkSource;
-use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
-use embassy_nrf::interrupt::InterruptExt;
-use embassy_nrf::{bind_interrupts, interrupt, peripherals, Peri};
-use embassy_time::Timer;
-use static_cell::StaticCell;
+use core::{mem, ops::Deref};
 
-use {defmt_rtt as _, panic_probe as _};
+use assign_resources::assign_resources;
+use bruh78::{
+    radio::{self, Addresses, Packet, Radio, RadioClient},
+    sensors::Matrix,
+};
+use cortex_m_rt::entry;
+use defmt::{info, *};
+use embassy_executor::{Executor, InterruptExecutor, Spawner};
+use embassy_futures::join::join;
+use embassy_nrf::{
+    bind_interrupts,
+    config::HfclkSource,
+    gpio::{Input, Level, Output, OutputDrive, Pull},
+    interrupt,
+    interrupt::InterruptExt,
+    peripherals::{self, USBD},
+    usb::{self, vbus_detect::HardwareVbusDetect, Driver},
+    Peri,
+};
+
+use defmt_rtt as _; // global logger
+use embassy_nrf as _;
+// time driver
+use panic_probe as _;
+use static_cell::StaticCell;
 
 static RADIO_EXECUTOR: InterruptExecutor = InterruptExecutor::new();
 static THREAD_EXECUTOR: StaticCell<Executor> = StaticCell::new();
 
 bind_interrupts!(struct Irqs {
-    RADIO => radio::InterruptHandler;
+    USBD => usb::InterruptHandler<peripherals::USBD>;
+    CLOCK_POWER => usb::vbus_detect::InterruptHandler;
+    RADIO  => radio::InterruptHandler;
 });
 
 assign_resources! {
@@ -41,6 +53,15 @@ assign_resources! {
     radio: RadioResources {
         rad: RADIO,
     }
+    usbd: UsbdResources {
+        usbd: USBD
+    }
+}
+
+#[embassy_executor::task]
+async fn logger_task(r: UsbdResources) {
+    let driver = Driver::new(r.usbd, Irqs, HardwareVbusDetect::new(Irqs));
+    embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
 }
 
 #[embassy_executor::task]
@@ -55,7 +76,7 @@ async fn radio_task(r: RadioResources) {
 }
 
 #[embassy_executor::task]
-async fn keyboard_task(k: KeyboardResources) {
+async fn thread_task(k: KeyboardResources) {
     let columns = [
         Output::new(k.out_0, Level::Low, OutputDrive::Standard),
         Output::new(k.out_1, Level::Low, OutputDrive::Standard),
@@ -80,11 +101,12 @@ async fn keyboard_task(k: KeyboardResources) {
         let new_rep = matrix.get_state();
         if new_rep != rep {
             rep = new_rep;
+            log::info!("New state: {:018b}", new_rep);
             let mut packet = radio.mutate_packet().await;
             packet.copy_from_slice(&rep.to_le_bytes());
+            log::info!("Sending bytes: {:?}", &packet[..]);
             radio.send_packet(packet).await;
         }
-        Timer::after_micros(5).await;
     }
 }
 
@@ -95,19 +117,20 @@ unsafe fn EGU1_SWI1() {
 
 #[entry]
 fn main() -> ! {
-    let mut config = embassy_nrf::config::Config::default();
-    config.hfclk_source = HfclkSource::ExternalXtal;
-    let p = embassy_nrf::init(config);
+    log::info!("Hello World!");
+
+    let mut nrf_config = embassy_nrf::config::Config::default();
+    nrf_config.hfclk_source = HfclkSource::ExternalXtal;
+    let p = embassy_nrf::init(nrf_config);
     let r = split_resources!(p);
 
-    embassy_nrf::interrupt::EGU1_SWI1.set_priority(embassy_nrf::interrupt::Priority::P1);
-    embassy_nrf::interrupt::RADIO.set_priority(embassy_nrf::interrupt::Priority::P0);
-    embassy_nrf::interrupt::GPIOTE.set_priority(embassy_nrf::interrupt::Priority::P2);
+    embassy_nrf::interrupt::EGU1_SWI1.set_priority(embassy_nrf::interrupt::Priority::P6);
     let spawner = RADIO_EXECUTOR.start(embassy_nrf::interrupt::EGU1_SWI1);
     spawner.spawn(radio_task(r.radio)).unwrap();
 
-    let executor = THREAD_EXECUTOR.init_with(Executor::new);
-    executor.run(|spawner| {
-        spawner.spawn(keyboard_task(r.keyboard)).unwrap();
+    let exectuor = THREAD_EXECUTOR.init_with(Executor::new);
+    exectuor.run(|spawner| {
+        spawner.spawn(logger_task(r.usbd)).unwrap();
+        spawner.spawn(thread_task(r.keyboard)).unwrap();
     });
 }

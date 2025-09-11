@@ -87,7 +87,7 @@ async fn keyboard_task(k: KeyboardResources) {
             rep = new_rep;
             let mut packet = radio.mutate_packet().await;
             packet.copy_from_slice(&rep.to_le_bytes());
-            radio.send_packet(packet, 0).await;
+            radio.send_packet(packet).await;
         }
     }
 }
@@ -99,7 +99,9 @@ async fn main(_spawner: Spawner) {
     let p = embassy_nrf::init(config);
     let r = split_resources!(p);
 
-    embassy_nrf::interrupt::EGU1_SWI1.set_priority(embassy_nrf::interrupt::Priority::P6);
+    embassy_nrf::interrupt::EGU1_SWI1.set_priority(embassy_nrf::interrupt::Priority::P1);
+    embassy_nrf::interrupt::RADIO.set_priority(embassy_nrf::interrupt::Priority::P0);
+    embassy_nrf::interrupt::GPIOTE.set_priority(embassy_nrf::interrupt::Priority::P2);
     let spawner = RADIO_EXECUTOR.start(embassy_nrf::interrupt::EGU1_SWI1);
     spawner.spawn(radio_task(r.radio)).unwrap();
 
