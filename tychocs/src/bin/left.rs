@@ -6,7 +6,7 @@
 #![no_main]
 
 use assign_resources::assign_resources;
-use bruh78::radio::{self, Addresses, Packet, Radio, RadioClient};
+use bruh78::radio::{self, send_packet, Addresses, Packet, Radio};
 use bruh78::sensors::Matrix;
 use cortex_m_rt::entry;
 use embassy_executor::{Executor, InterruptExecutor, Spawner};
@@ -74,15 +74,14 @@ async fn keyboard_task(k: KeyboardResources) {
     let mut matrix = Matrix::new(columns, rows);
     matrix.disable_debouncer(15..17);
     let mut rep = 0;
-    let radio = RadioClient {};
     loop {
         matrix.update().await;
         let new_rep = matrix.get_state();
         if new_rep != rep {
             rep = new_rep;
-            let mut packet = radio.mutate_packet().await;
+            let mut packet = Packet::default();
             packet.copy_from_slice(&rep.to_le_bytes());
-            radio.send_packet(packet).await;
+            send_packet(&packet).await;
         }
         Timer::after_micros(5).await;
     }

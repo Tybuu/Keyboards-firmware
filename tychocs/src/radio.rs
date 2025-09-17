@@ -32,9 +32,14 @@ const META_SIZE: usize = 3;
 
 static STATE: AtomicWaker = AtomicWaker::new();
 
+const NUM_PACKETS: usize = 5;
+
 static DATA: Mutex<CriticalSectionRawMutex, Packet> = Mutex::new(Packet::default());
-static TO_SINGLETON: Channel<CriticalSectionRawMutex, Pipe<'static>, 1> = Channel::new();
-static FROM_SINGLETON: Signal<CriticalSectionRawMutex, Pipe<'static>> = Signal::new();
+
+static REQUESTS: Channel<CriticalSectionRawMutex, Direction, NUM_PACKETS> = Channel::new();
+
+static RECV_CHANNEL: Channel<CriticalSectionRawMutex, Packet, NUM_PACKETS> = Channel::new();
+static SEND_CHANNEL: Channel<CriticalSectionRawMutex, Packet, NUM_PACKETS> = Channel::new();
 
 pub struct InterruptHandler {}
 
@@ -278,15 +283,16 @@ impl<'d> Radio<'d> {
 
     pub async fn run(mut self) {
         loop {
-            let mut pipe = TO_SINGLETON.receive().await;
-            match pipe.direction {
+            let dir = REQUESTS.receive().await;
+            match dir {
                 Direction::Tx => {
-                    let addr = pipe.packet.addr;
-                    self.send(&mut pipe.packet).await;
+                    let mut packet = SEND_CHANNEL.receive().await;
+                    self.send(&mut packet).await;
                 }
                 Direction::Rx => {
-                    self.receive(&mut pipe.packet).await;
-                    FROM_SINGLETON.signal(pipe);
+                    let mut packet = Packet::default();
+                    self.receive(&mut packet).await;
+                    RECV_CHANNEL.send(packet).await;
                 }
             }
         }
@@ -361,37 +367,14 @@ enum Direction {
     Rx,
 }
 
-pub struct Pipe<'a> {
-    packet: MutexGuard<'a, CriticalSectionRawMutex, Packet>,
-    direction: Direction,
+pub async fn send_packet(packet: &Packet) {
+    SEND_CHANNEL.send(*packet).await;
+    REQUESTS.send(Direction::Tx).await;
 }
 
-pub struct RadioClient {}
-
-impl RadioClient {
-    pub async fn mutate_packet(&self) -> MutexGuard<'static, CriticalSectionRawMutex, Packet> {
-        let mut packet = DATA.lock().await;
-        *packet = Packet::default();
-        packet
-    }
-
-    pub async fn send_packet(&self, packet: MutexGuard<'static, CriticalSectionRawMutex, Packet>) {
-        let pipe = Pipe {
-            packet,
-            direction: Direction::Tx,
-        };
-        TO_SINGLETON.send(pipe).await;
-    }
-    pub async fn receive_packet(&self) -> MutexGuard<'static, CriticalSectionRawMutex, Packet> {
-        let packet = DATA.lock().await;
-        let pipe = Pipe {
-            packet,
-            direction: Direction::Rx,
-        };
-        TO_SINGLETON.send(pipe).await;
-        let res = FROM_SINGLETON.wait().await;
-        res.packet
-    }
+pub async fn receive_packet() -> Packet {
+    REQUESTS.send(Direction::Rx).await;
+    RECV_CHANNEL.receive().await
 }
 
 #[repr(u8)]
@@ -401,6 +384,7 @@ enum PacketType {
     Ack,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Packet {
     pub addr: u8,
     buffer: [u8; BUFFER_SIZE + META_SIZE],

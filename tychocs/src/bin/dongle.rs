@@ -5,7 +5,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use bruh78::{
     key_config::set_keys,
-    radio::{self, Addresses, Radio, RadioClient},
+    radio::{self, Addresses, Radio},
     sensors::DongleSensors,
 };
 use cortex_m_rt::entry;
@@ -141,8 +141,7 @@ async fn thread_task(usbd: Peri<'static, peripherals::USBD>) {
     let mut usb = builder.build();
     let usb_fut = usb.run();
 
-    let radio = RadioClient {};
-    let sensors = DongleSensors::new(&radio);
+    let sensors = DongleSensors::new();
     let mut report: Report<_, DefaultSwitch> = Report::new(sensors);
 
     let mut keys = KEYS.lock().await;
