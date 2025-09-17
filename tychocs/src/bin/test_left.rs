@@ -5,7 +5,7 @@ use core::{mem, ops::Deref};
 
 use assign_resources::assign_resources;
 use bruh78::{
-    radio::{self, Addresses, Packet, Radio, RadioClient},
+    radio::{self, packet::Packet, radio::RadioPerp, send_packet, Addresses},
     sensors::Matrix,
 };
 use cortex_m_rt::entry;
@@ -25,6 +25,7 @@ use embassy_nrf::{
 
 use defmt_rtt as _; // global logger
 use embassy_nrf as _;
+use embassy_time::Timer;
 // time driver
 use panic_probe as _;
 use static_cell::StaticCell;
@@ -67,7 +68,7 @@ async fn logger_task(r: UsbdResources) {
 #[embassy_executor::task]
 async fn radio_task(r: RadioResources) {
     let addresses = Addresses::default();
-    let mut radio = Radio::new(r.rad, Irqs, addresses);
+    let mut radio = RadioPerp::new(r.rad, Irqs, addresses);
     radio.set_tx_addresses(|w| w.set_txaddress(1));
     radio.set_rx_addresses(|w| {
         w.set_addr0(true);
@@ -95,18 +96,18 @@ async fn thread_task(k: KeyboardResources) {
     let mut matrix = Matrix::new(columns, rows);
     matrix.disable_debouncer(15..17);
     let mut rep = 0;
-    let radio = RadioClient {};
     loop {
         matrix.update().await;
         let new_rep = matrix.get_state();
         if new_rep != rep {
             rep = new_rep;
             log::info!("New state: {:018b}", new_rep);
-            let mut packet = radio.mutate_packet().await;
+            let mut packet = Packet::default();
             packet.copy_from_slice(&rep.to_le_bytes());
             log::info!("Sending bytes: {:?}", &packet[..]);
-            radio.send_packet(packet).await;
+            send_packet(&packet).await;
         }
+        Timer::after_millis(1).await;
     }
 }
 
@@ -124,7 +125,11 @@ fn main() -> ! {
     let p = embassy_nrf::init(nrf_config);
     let r = split_resources!(p);
 
-    embassy_nrf::interrupt::EGU1_SWI1.set_priority(embassy_nrf::interrupt::Priority::P6);
+    embassy_nrf::interrupt::EGU1_SWI1.set_priority(embassy_nrf::interrupt::Priority::P1);
+    embassy_nrf::interrupt::RADIO.set_priority(embassy_nrf::interrupt::Priority::P0);
+    embassy_nrf::interrupt::USBD.set_priority(embassy_nrf::interrupt::Priority::P2);
+    embassy_nrf::interrupt::CLOCK_POWER.set_priority(embassy_nrf::interrupt::Priority::P2);
+    embassy_nrf::interrupt::GPIOTE.set_priority(embassy_nrf::interrupt::Priority::P3);
     let spawner = RADIO_EXECUTOR.start(embassy_nrf::interrupt::EGU1_SWI1);
     spawner.spawn(radio_task(r.radio)).unwrap();
 

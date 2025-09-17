@@ -19,6 +19,7 @@ use embassy_nrf::{
     interrupt::InterruptExt,
     peripherals::{self},
     qspi::Qspi,
+    rng::Rng,
     usb::{self, vbus_detect::HardwareVbusDetect, Driver},
     Peri,
 };
@@ -65,9 +66,13 @@ async fn storage_task(storage: Storage<Qspi<'static, peripherals::QSPI>, NoCache
 }
 
 #[embassy_executor::task]
-async fn radio_task(radio: Peri<'static, peripherals::RADIO>) {
+async fn radio_task(
+    radio: Peri<'static, peripherals::RADIO>,
+    rng: Peri<'static, peripherals::RNG>,
+) {
     let addresses = Addresses::default();
-    let mut radio = Radio::new(radio, Irqs, addresses);
+    let rng = Rng::new_blocking(rng);
+    let mut radio = Radio::new(radio, Irqs, rng, addresses);
     radio.set_tx_addresses(|w| w.set_txaddress(0));
     radio.set_rx_addresses(|w| {
         w.set_addr1(true);
@@ -191,7 +196,7 @@ fn main() -> ! {
     embassy_nrf::interrupt::USBD.set_priority(embassy_nrf::interrupt::Priority::P2);
     embassy_nrf::interrupt::CLOCK_POWER.set_priority(embassy_nrf::interrupt::Priority::P2);
     let spawner = RADIO_EXECUTOR.start(embassy_nrf::interrupt::EGU1_SWI1);
-    spawner.spawn(radio_task(p.RADIO)).unwrap();
+    spawner.spawn(radio_task(p.RADIO, p.RNG)).unwrap();
     let exectuor = THREAD_EXECUTOR.init_with(Executor::new);
     exectuor.run(|spawner| {
         spawner.spawn(thread_task(p.USBD)).unwrap();

@@ -13,6 +13,7 @@ use embassy_executor::{Executor, InterruptExecutor, Spawner};
 use embassy_nrf::config::HfclkSource;
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::interrupt::InterruptExt;
+use embassy_nrf::rng::Rng;
 use embassy_nrf::{bind_interrupts, interrupt, peripherals, Peri};
 use embassy_time::Timer;
 use static_cell::StaticCell;
@@ -24,6 +25,7 @@ static THREAD_EXECUTOR: StaticCell<Executor> = StaticCell::new();
 
 bind_interrupts!(struct Irqs {
     RADIO => radio::InterruptHandler;
+    RNG => embassy_nrf::rng::InterruptHandler<embassy_nrf::peripherals::RNG>;
 });
 
 assign_resources! {
@@ -40,13 +42,15 @@ assign_resources! {
     },
     radio: RadioResources {
         rad: RADIO,
+        rng: RNG
     }
 }
 
 #[embassy_executor::task]
 async fn radio_task(r: RadioResources) {
     let addresses = Addresses::default();
-    let mut radio = Radio::new(r.rad, Irqs, addresses);
+    let rng = Rng::new(r.rng, Irqs);
+    let mut radio = Radio::new(r.rad, Irqs, rng, addresses);
     radio.set_tx_addresses(|w| w.set_txaddress(1));
     radio.set_rx_addresses(|w| {
         w.set_addr0(true);

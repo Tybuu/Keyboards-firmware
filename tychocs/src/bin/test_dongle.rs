@@ -3,7 +3,7 @@
 
 use core::{mem, ops::Deref};
 
-use bruh78::radio::{self, Addresses, Packet, Radio, RadioClient};
+use bruh78::radio::{self, radio::RadioCentral, receive_packet, Addresses};
 use cortex_m_rt::entry;
 use defmt::{info, *};
 use embassy_executor::{Executor, InterruptExecutor, Spawner};
@@ -44,7 +44,7 @@ async fn logger_task(usbd: Peri<'static, peripherals::USBD>) {
 #[embassy_executor::task]
 async fn radio_task(radio: Peri<'static, peripherals::RADIO>) {
     let addresses = Addresses::default();
-    let mut radio = Radio::new(radio, Irqs, addresses);
+    let mut radio = RadioCentral::new(radio, Irqs, addresses);
     radio.set_tx_addresses(|w| w.set_txaddress(0));
     radio.set_rx_addresses(|w| {
         w.set_addr1(true);
@@ -54,12 +54,22 @@ async fn radio_task(radio: Peri<'static, peripherals::RADIO>) {
 }
 
 #[embassy_executor::task]
-async fn thread_task() {
-    let client = RadioClient {};
+async fn thread_task(led: Peri<'static, peripherals::P0_26>) {
+    let mut out = Output::new(
+        led,
+        embassy_nrf::gpio::Level::High,
+        embassy_nrf::gpio::OutputDrive::Standard,
+    );
     let master_loop = async {
         loop {
-            let data = client.receive_packet().await;
+            let data = receive_packet().await;
             log::info!("Received {:?}", &data[..]);
+            let num = u32::from_le_bytes(data[0..3].try_into().unwrap());
+            if num != 0 {
+                out.set_low();
+            } else {
+                out.set_high();
+            }
             Timer::after_millis(1).await;
         }
     };
@@ -67,7 +77,7 @@ async fn thread_task() {
     let heartbeat_loop = async {
         loop {
             log::info!("Heartbeat!");
-            Timer::after_secs(2).await;
+            Timer::after_secs(10).await;
         }
     };
     join(master_loop, heartbeat_loop).await;
@@ -96,6 +106,6 @@ fn main() -> ! {
     let exectuor = THREAD_EXECUTOR.init_with(Executor::new);
     exectuor.run(|spawner| {
         spawner.spawn(logger_task(p.USBD)).unwrap();
-        spawner.spawn(thread_task()).unwrap();
+        spawner.spawn(thread_task(p.P0_26)).unwrap();
     });
 }

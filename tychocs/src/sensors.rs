@@ -9,7 +9,7 @@ use embassy_time::{Duration, Instant};
 use heapless::Vec;
 use key_lib::{position::KeySensors, NUM_KEYS};
 
-use crate::radio::RadioClient;
+use crate::radio::receive_packet;
 
 const DEBOUNCE_TIME: u64 = 5;
 #[derive(Copy, Clone, Debug)]
@@ -144,17 +144,15 @@ impl<'a, const INPUT_SIZE: usize, const OUTPUT_SIZE: usize> Matrix<'a, INPUT_SIZ
     }
 }
 
-pub struct DongleSensors<'a> {
-    rad: &'a RadioClient,
-}
+pub struct DongleSensors {}
 
-impl<'a> DongleSensors<'a> {
-    pub fn new(rad: &'a RadioClient) -> Self {
-        Self { rad }
+impl DongleSensors {
+    pub fn new() -> Self {
+        Self {}
     }
 }
 
-impl<'a> KeySensors for DongleSensors<'a> {
+impl KeySensors for DongleSensors {
     type Item = bool;
 
     async fn update_positions<K: key_lib::position::KeyState<Item = Self::Item>>(
@@ -162,10 +160,9 @@ impl<'a> KeySensors for DongleSensors<'a> {
         positions: &mut [K],
     ) {
         const OFFSET: usize = NUM_KEYS / 2;
-        let states = self.rad.receive_packet().await;
+        let states = receive_packet().await;
         let key_states = u32::from_le_bytes(states[0..4].try_into().unwrap());
         let addr = states.addr;
-        drop(states);
         if addr == 1 {
             positions[..OFFSET]
                 .iter_mut()
