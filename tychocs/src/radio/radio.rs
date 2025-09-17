@@ -150,7 +150,7 @@ impl CentralConnection {
 }
 
 pub struct RadioCentral<'d> {
-    pub rad: Radio<'d>,
+    rad: Radio<'d>,
     connections: [CentralConnection; NUM_CONNECTIONS],
 }
 
@@ -238,29 +238,26 @@ impl<'d> RadioPerp<'d> {
                         let mut adv_packet = Packet::default();
                         adv_packet.set_type(PacketType::Advertise);
                         let tx_addr = self.rad.txaddress();
-                        let rx_addr = self.rad.rx_addresses();
                         //log::info!("TxAddr: {}, RxAddr: {:08b}", tx_addr, rx_addr);
                         let cond = |packet: &Packet| {
                             packet.packet_type().unwrap() == PacketType::EstablishConnection
                                 && packet.id() == tx_addr
                         };
-                        for _ in 0..NUM_RETRIES {
-                            self.rad.send(&adv_packet).await;
+                        self.rad.send(&adv_packet).await;
 
-                            if self
-                                .rad
-                                .receive_with_conditions(ACK_TIMEOUT, cond)
-                                .await
-                                .is_some()
-                            {
-                                //log::info!("Established connection!");
-                                self.state = ConnectionState::ConnectedSend;
-                                self.prev_recv_time = Instant::now();
-                                self.tx_id = 0;
-                                self.num_missed_events = 0;
-                                // Skip the timeout as we've already established a connection
-                                return;
-                            }
+                        if self
+                            .rad
+                            .receive_with_conditions(ACK_TIMEOUT, cond)
+                            .await
+                            .is_some()
+                        {
+                            //log::info!("Established connection!");
+                            self.state = ConnectionState::ConnectedSend;
+                            self.prev_recv_time = Instant::now();
+                            self.tx_id = 0;
+                            self.num_missed_events = 0;
+                            // Skip the timeout as we've already established a connection
+                            return;
                         }
                         //log::info!("Unable to establish connection!");
                         // await for timeout as no connection was established

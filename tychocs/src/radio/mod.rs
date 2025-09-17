@@ -11,6 +11,7 @@ use crate::{
 mod inner_radio;
 pub mod packet;
 pub mod radio;
+pub mod simple;
 
 pub(in super::radio) static STATE: AtomicWaker = AtomicWaker::new();
 

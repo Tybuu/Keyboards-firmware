@@ -100,9 +100,13 @@ impl<'d> Radio<'d> {
         r.rxaddresses().read().0 as u8
     }
 
-    pub(crate) async fn receive<'a>(&mut self) -> Packet {
+    pub(crate) async fn receive(&mut self) -> Packet {
         let mut packet = Packet::default();
-        ReceiveFuture::new(&mut packet).await;
+        loop {
+            if ReceiveFuture::new(&mut packet).await.is_ok() {
+                break;
+            }
+        }
         packet
     }
 
@@ -114,10 +118,9 @@ impl<'d> Radio<'d> {
         let receive_task = async {
             loop {
                 let mut packet = Packet::default();
-                ReceiveFuture::new(&mut packet).await;
-                if f(&packet) {
+                let res = ReceiveFuture::new(&mut packet).await;
+                if res.is_ok() && f(&packet) {
                     return packet;
-                } else {
                 }
             }
         };
@@ -149,7 +152,7 @@ struct SendFuture<'a> {
 }
 
 impl<'a> SendFuture<'a> {
-    fn new(packet: &'a Packet) -> SendFuture {
+    fn new(packet: &'a Packet) -> SendFuture<'a> {
         Self {
             complete: false,
             init: false,
@@ -242,7 +245,7 @@ impl<'a> ReceiveFuture<'a> {
 }
 
 impl<'a> Future for ReceiveFuture<'a> {
-    type Output = ();
+    type Output = Result<(), ()>;
     fn poll(
         mut self: core::pin::Pin<&mut Self>,
         cx: &mut core::task::Context<'_>,
@@ -252,15 +255,13 @@ impl<'a> Future for ReceiveFuture<'a> {
         STATE.register(cx.waker());
         if r.events_disabled().read() != 0 {
             r.events_disabled().write_value(0);
+            self.complete = true;
             if r.events_crcok().read() != 0 {
                 r.events_crcok().write_value(0);
                 self.packet.addr = r.rxmatch().read().rxmatch();
-                self.complete = true;
-                Poll::Ready(())
+                Poll::Ready(Ok(()))
             } else {
-                r.tasks_rxen().write_value(1);
-                r.intenset().write(|w| w.set_disabled(true));
-                Poll::Pending
+                Poll::Ready(Err(()))
             }
         } else {
             r.intenset().write(|w| w.set_disabled(true));
