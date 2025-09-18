@@ -67,7 +67,7 @@ impl CentralConnection {
                     self.addr = packet.addr;
                     self.num_events = 0;
                     self.num_miss_events = 0;
-                    //log::info!("Established connection with addr {}", self.addr);
+                    log::info!("Established connection with addr {}", self.addr);
                 }
             }
             ConnectionState::ConnectedReceive => {
@@ -78,7 +78,7 @@ impl CentralConnection {
                 };
 
                 if let Some(packet) = rad.receive_with_conditions(RECEIVE_TIMEOUT, cond).await {
-                    //log::info!("Packet received from addr {}", self.addr);
+                    log::info!("Packet received from addr {}", self.addr);
                     let mut ack_packet = Packet::default();
                     ack_packet.set_id(packet.id());
                     ack_packet.set_type(PacketType::Ack);
@@ -131,15 +131,15 @@ impl CentralConnection {
                 }
 
                 if ack_received {
-                    //log::info!("Ack received");
+                    log::info!("Ack received");
                     self.num_miss_events = 0
                 } else {
-                    //log::info!("No ack received");
+                    log::info!("No ack received");
                     self.num_miss_events += 1;
                 }
 
                 if self.num_miss_events >= MAX_MISSED_EVENTS {
-                    //log::info!("switching to scanning");
+                    log::info!("switching to scanning");
                     self.state = ConnectionState::Advertisement;
                 } else {
                     self.state = ConnectionState::ConnectedReceive;
@@ -238,7 +238,6 @@ impl<'d> RadioPerp<'d> {
                         let mut adv_packet = Packet::default();
                         adv_packet.set_type(PacketType::Advertise);
                         let tx_addr = self.rad.txaddress();
-                        //log::info!("TxAddr: {}, RxAddr: {:08b}", tx_addr, rx_addr);
                         let cond = |packet: &Packet| {
                             packet.packet_type().unwrap() == PacketType::EstablishConnection
                                 && packet.id() == tx_addr
@@ -251,7 +250,7 @@ impl<'d> RadioPerp<'d> {
                             .await
                             .is_some()
                         {
-                            //log::info!("Established connection!");
+                            log::info!("Established connection!");
                             self.state = ConnectionState::ConnectedSend;
                             self.prev_recv_time = Instant::now();
                             self.tx_id = 0;
@@ -259,7 +258,7 @@ impl<'d> RadioPerp<'d> {
                             // Skip the timeout as we've already established a connection
                             return;
                         }
-                        //log::info!("Unable to establish connection!");
+                        log::info!("Unable to establish connection!");
                         // await for timeout as no connection was established
                         core::future::pending::<()>().await;
                     };
@@ -277,7 +276,7 @@ impl<'d> RadioPerp<'d> {
                         .receive_with_conditions(RECEIVE_TIMEOUT, cond)
                         .await
                     {
-                        //log::info!("Data received from central!");
+                        log::info!("Data received from central!");
                         self.prev_recv_time = Instant::now();
                         let mut ack_packet = Packet::default();
                         ack_packet.set_id(packet.id());
@@ -294,7 +293,7 @@ impl<'d> RadioPerp<'d> {
                         }
                         self.num_missed_events = 0;
                     } else if self.num_missed_events >= MAX_MISSED_EVENTS {
-                        //log::info!("Switching to advertsing");
+                        log::info!("Switching to advertsing");
                         self.state = ConnectionState::Advertisement;
                     } else {
                         self.num_missed_events += 1;
@@ -351,12 +350,12 @@ impl<'d> RadioPerp<'d> {
                                                 .await
                                                 .is_some()
                                             {
-                                                //log::info!("Packet sent and ack received!");
+                                                log::info!("Packet sent and ack received!");
                                                 self.num_missed_events = 0;
                                                 return;
                                             }
                                         }
-                                        //log::info!("Packet sent and no ack received!");
+                                        log::info!("Packet sent and no ack received!");
                                     }
                                 }
                             }

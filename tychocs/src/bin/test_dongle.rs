@@ -44,7 +44,7 @@ async fn logger_task(usbd: Peri<'static, peripherals::USBD>) {
 #[embassy_executor::task]
 async fn radio_task(radio: Peri<'static, peripherals::RADIO>) {
     let addresses = Addresses::default();
-    let mut radio = CRadio::new(radio, Irqs, addresses);
+    let mut radio = RadioCentral::new(radio, Irqs, addresses);
     radio.set_tx_addresses(|w| w.set_txaddress(0));
     radio.set_rx_addresses(|w| {
         w.set_addr1(true);
@@ -64,7 +64,7 @@ async fn thread_task(led: Peri<'static, peripherals::P0_26>) {
         loop {
             let data = receive_packet().await;
             log::info!("Received {:?}", &data[..]);
-            let num = u32::from_le_bytes(data[0..3].try_into().unwrap());
+            let num = u32::from_le_bytes(data[0..4].try_into().unwrap());
             if num != 0 {
                 out.set_low();
             } else {

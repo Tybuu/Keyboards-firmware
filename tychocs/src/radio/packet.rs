@@ -4,7 +4,7 @@ pub(in super::super::radio) const BUFFER_SIZE: usize = 32;
 pub(in super::super::radio) const META_SIZE: usize = 3;
 
 #[repr(u8)]
-#[derive(Clone, Copy, PartialEq, Eq, TryFromPrimitive, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, TryFromPrimitive, Debug, defmt::Format)]
 pub(in super::super::radio) enum PacketType {
     Data,
     Ack,

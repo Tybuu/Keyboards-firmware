@@ -51,11 +51,11 @@ impl<'d> Radio<'d> {
             w.set_maxlen(BUFFER_SIZE as u8);
             w.set_statlen(0);
             w.set_balen(4);
-            // w.set_whiteen(true);
+            w.set_whiteen(true);
             w.set_endian(embassy_nrf::pac::radio::vals::Endian::LITTLE);
         });
 
-        // r.datawhiteiv().write(|w| w.set_datawhiteiv(80));
+        r.datawhiteiv().write(|w| w.set_datawhiteiv(80));
 
         r.base0().write_value(addresses.base[0]);
         r.base1().write_value(addresses.base[1]);

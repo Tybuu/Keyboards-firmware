@@ -1,3 +1,4 @@
+use defmt::info;
 use embassy_futures::select::select;
 use embassy_nrf::{
     interrupt,
@@ -40,11 +41,17 @@ impl<'d> CRadio<'d> {
             let recv_task = async {
                 loop {
                     let packet = self.rad.receive().await;
-                    if packet.packet_type().unwrap() == PacketType::Data
-                        && RECV_CHANNEL.try_send(packet).is_err()
-                    {
-                        RECV_CHANNEL.try_receive();
-                        RECV_CHANNEL.try_send(packet);
+                    if packet.packet_type().unwrap() == PacketType::Data {
+                        if RECV_CHANNEL.try_send(packet).is_err() {
+                            RECV_CHANNEL.try_receive();
+                            RECV_CHANNEL.try_send(packet);
+                        }
+                    } else {
+                        info!(
+                            "Received invalid packet from {} with data type: {:?}",
+                            packet.addr,
+                            packet.packet_type().unwrap()
+                        );
                     }
                 }
             };
