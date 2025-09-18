@@ -5,7 +5,14 @@ use core::{mem, ops::Deref};
 
 use assign_resources::assign_resources;
 use bruh78::{
-    radio::{self, packet::Packet, radio::RadioPerp, send_packet, simple::CRadio, Addresses},
+    radio::{
+        self,
+        packet::Packet,
+        radio::RadioPerp,
+        send_packet,
+        simple::{CRadio, PRadio},
+        Addresses,
+    },
     sensors::Matrix,
 };
 use cortex_m_rt::entry;
@@ -68,7 +75,7 @@ async fn logger_task(r: UsbdResources) {
 #[embassy_executor::task]
 async fn radio_task(r: RadioResources) {
     let addresses = Addresses::default();
-    let mut radio = RadioPerp::new(r.rad, Irqs, addresses);
+    let mut radio = PRadio::new(r.rad, Irqs, addresses);
     radio.set_tx_addresses(|w| w.set_txaddress(1));
     radio.set_rx_addresses(|w| {
         w.set_addr0(true);

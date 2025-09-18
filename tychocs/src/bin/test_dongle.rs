@@ -3,7 +3,13 @@
 
 use core::{mem, ops::Deref};
 
-use bruh78::radio::{self, radio::RadioCentral, receive_packet, simple::CRadio, Addresses};
+use bruh78::radio::{
+    self,
+    radio::RadioCentral,
+    receive_packet,
+    simple::{CRadio, PRadio},
+    Addresses,
+};
 use cortex_m_rt::entry;
 use defmt::{info, *};
 use embassy_executor::{Executor, InterruptExecutor, Spawner};
@@ -44,7 +50,7 @@ async fn logger_task(usbd: Peri<'static, peripherals::USBD>) {
 #[embassy_executor::task]
 async fn radio_task(radio: Peri<'static, peripherals::RADIO>) {
     let addresses = Addresses::default();
-    let mut radio = RadioCentral::new(radio, Irqs, addresses);
+    let mut radio = CRadio::new(radio, Irqs, addresses);
     radio.set_tx_addresses(|w| w.set_txaddress(0));
     radio.set_rx_addresses(|w| {
         w.set_addr1(true);
