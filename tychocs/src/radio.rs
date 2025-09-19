@@ -32,7 +32,7 @@ const META_SIZE: usize = 3;
 
 static STATE: AtomicWaker = AtomicWaker::new();
 
-const NUM_PACKETS: usize = 5;
+const NUM_PACKETS: usize = 20;
 
 static DATA: Mutex<CriticalSectionRawMutex, Packet> = Mutex::new(Packet::default());
 
@@ -109,11 +109,8 @@ impl<'d> Radio<'d> {
             w.set_maxlen(BUFFER_SIZE as u8);
             w.set_statlen(0);
             w.set_balen(4);
-            w.set_whiteen(true);
             w.set_endian(embassy_nrf::pac::radio::vals::Endian::LITTLE);
         });
-
-        r.datawhiteiv().write(|w| w.set_datawhiteiv(80));
 
         r.base0().write_value(addresses.base[0]);
         r.base1().write_value(addresses.base[1]);
@@ -154,31 +151,8 @@ impl<'d> Radio<'d> {
         }
     }
 
-    async fn await_clear(&mut self) {
-        let r = embassy_nrf::pac::RADIO;
-        r.shorts().write(|w| {});
-        r.rxaddresses().write(|w| w.0 = 0);
-
-        r.tasks_rxen().write_value(1);
-        while r.events_ready().read() == 0 {}
-        r.events_ready().write_value(0);
-        r.tasks_start().write_value(1);
-        r.tasks_rssistart().write_value(1);
-        let mut rssi_val = 0;
-        while rssi_val < 75 {
-            Timer::after_micros(10).await;
-            rssi_val = r.rssisample().read().rssisample();
-        }
-
-        r.tasks_rssistop().write_value(1);
-        while r.events_rssiend().read() == 0 {}
-        r.events_rssiend().write_value(0);
-        r.tasks_disable().write_value(1);
-        while r.events_disabled().read() == 0 {}
-        r.events_disabled().write_value(0);
-    }
-
     async fn transmit_ack(&mut self, id: u8) {
+        Timer::after_micros(40).await;
         let mut packet = Packet::default();
         packet.set_type(PacketType::Ack);
         packet.set_len(1);
@@ -213,7 +187,6 @@ impl<'d> Radio<'d> {
         packet.set_id(self.tx_id);
         packet.set_type(PacketType::Data);
         for _ in 0..10 {
-            // self.await_clear().await;
             self.send_inner(packet).await;
             if self.await_ack(packet.id()).await.is_ok() {
                 return;
