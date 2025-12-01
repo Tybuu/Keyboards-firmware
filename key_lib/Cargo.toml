@@ -32,7 +32,7 @@ log = "0.4"
 embedded-sdmmc = "0.9.0"
 num_enum = {version = "*", default-features = false}
 
-sequential-storage = "*"
+sequential-storage = "6.0.1"
 embedded-storage-async = "*"
 embedded-io = "*"
 

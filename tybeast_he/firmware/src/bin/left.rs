@@ -24,7 +24,8 @@ use embassy_usb::{Builder, Config, Handler};
 use key_lib::com::Com;
 use key_lib::descriptor::{BufferReport, KeyboardReportNKRO, MouseReport, SlaveReport};
 use key_lib::keys::Keys;
-use key_lib::position::{HeSwitch, KeyState, SlavePosition};
+use key_lib::position::KeyState;
+use key_lib::position::{KeySensors, WootingPosition};
 use key_lib::report::Report;
 use key_lib::storage::Storage;
 use key_lib::NUM_KEYS;
@@ -40,7 +41,7 @@ const FLASH_START: u32 = 1024 * 1024;
 const FLASH_END: u32 = FLASH_START + 4096 * 5;
 const FLASH_SIZE: usize = 2 * 1024 * 1024;
 
-static KEYS: Mutex<ThreadModeRawMutex, Keys<HeSwitch, Indicator>> = Mutex::new(Keys::default());
+static KEYS: Mutex<ThreadModeRawMutex, Keys<Indicator>> = Mutex::new(Keys::default());
 
 static CACHE: StaticCell<NoCache> = StaticCell::new();
 
@@ -166,7 +167,6 @@ async fn main(_spawner: Spawner) {
         hid_master_task.chan(),
         order,
     );
-
     let Pio {
         mut common, sm0, ..
     } = Pio::new(p.PIO0, Irqs);
@@ -177,24 +177,17 @@ async fn main(_spawner: Spawner) {
     let mut keys = KEYS.lock().await;
     keys.set_indicator(Indicator {});
     let _ = keys.load_keys_from_storage(0).await;
-    keys.set_position_type_ranged(
-        (NUM_KEYS / 2)..NUM_KEYS,
-        HeSwitch::Slave(SlavePosition::DEFAULT),
-    );
-    keys.setup_positions(&mut key_sensors).await;
 
     drop(keys);
 
     let mut com = Com::new(&KEYS, com_reader, com_writer);
 
     let key_loop = async {
-        let mut report = Report::new(key_sensors);
+        let mut report: Report<_, WootingPosition> = Report::new(key_sensors);
         loop {
             let (key_rep, mouse_rep);
             {
-                let mut keys = KEYS.lock().await;
-                (key_rep, mouse_rep) = report.generate_report(&mut keys).await;
-                drop(keys);
+                (key_rep, mouse_rep) = report.generate_report(&KEYS).await;
             }
             let key_task = async {
                 if let Some(rep) = key_rep {

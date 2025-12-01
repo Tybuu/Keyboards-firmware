@@ -53,7 +53,7 @@ log = "0.4"
 embedded-sdmmc = "0.9.0"
 num_enum = {version = "0.7.4", default-features = false}
 
-sequential-storage = "5.0.0"
+sequential-storage = "6.0.1"
 embedded-storage-async = "0.4.1"
 smart-leds = "0.4.0"
 
