@@ -12,7 +12,7 @@ use embassy_nrf::{
         typelevel::{self, Interrupt},
     },
     pac::radio::regs::{Rxaddresses, Txaddress},
-    radio::ieee802154::RadioState,
+    radio::{ieee802154::RadioState, TxPower},
     Peri,
 };
 use embassy_sync::{
@@ -91,6 +91,8 @@ impl<'d> Radio<'d> {
     ) -> Self {
         let r = embassy_nrf::pac::RADIO;
 
+        let c = embassy_nrf::pac::CLOCK;
+        c.tasks_hfclkstop().write_value(1);
         r.power().write(|w| w.set_power(false));
         r.power().write(|w| w.set_power(true));
 
@@ -157,26 +159,25 @@ impl<'d> Radio<'d> {
         packet.set_type(PacketType::Ack);
         packet.set_len(1);
         packet.set_id(id);
+        info!("Ack sent for {}", id);
         self.send_inner(&mut packet).await;
     }
 
     async fn await_ack(&mut self, id: u8) -> Result<(), ()> {
-        let r = embassy_nrf::pac::RADIO;
+        // let r = embassy_nrf::pac::RADIO;
         let mut packet = Packet::default();
         let addr = self.tx_addreses;
-        r.packetptr().write_value(packet.buffer.as_mut_ptr() as u32);
         let receive_task = async {
             loop {
                 if ReceiveFuture::new(&mut packet).await.is_ok()
                     && packet.packet_type().unwrap() == PacketType::Ack
                     && packet.id() == id
-                    && packet[0] == addr
                 {
                     break;
                 };
             }
         };
-        match select(Timer::after_micros(300), receive_task).await {
+        match select(Timer::after_micros(500), receive_task).await {
             embassy_futures::select::Either::First(_) => Err(()),
             embassy_futures::select::Either::Second(_) => Ok(()),
         }
@@ -186,7 +187,7 @@ impl<'d> Radio<'d> {
         self.tx_id = self.tx_id.wrapping_add(1);
         packet.set_id(self.tx_id);
         packet.set_type(PacketType::Data);
-        for _ in 0..10 {
+        loop {
             self.send_inner(packet).await;
             if self.await_ack(packet.id()).await.is_ok() {
                 return;
@@ -229,7 +230,6 @@ impl<'d> Radio<'d> {
         core::future::poll_fn(|cx| {
             STATE.register(cx.waker());
             if r.events_disabled().read() != 0 {
-                info!("Data sent!");
                 r.events_disabled().write_value(0);
                 Poll::Ready(())
             } else {
@@ -254,15 +254,36 @@ impl<'d> Radio<'d> {
         self.rx_addresses = r.rxaddresses().read().0;
     }
 
+    pub fn set_tx_power(&mut self, val: TxPower) {
+        let r = embassy_nrf::pac::RADIO;
+        r.txpower().write(|w| {
+            w.set_txpower(val);
+        });
+    }
+
     pub async fn run(mut self) {
+        let c = embassy_nrf::pac::CLOCK;
+        let mut wrote = false;
         loop {
             let dir = REQUESTS.receive().await;
             match dir {
                 Direction::Tx => {
                     let mut packet = SEND_CHANNEL.receive().await;
+                    c.events_hfclkstarted().write_value(0);
+                    c.tasks_hfclkstart().write_value(1);
+                    while c.events_hfclkstarted().read() == 0 {}
+                    c.events_hfclkstarted().write_value(0);
                     self.send(&mut packet).await;
+                    c.tasks_hfclkstop().write_value(1);
                 }
                 Direction::Rx => {
+                    if !wrote {
+                        c.events_hfclkstarted().write_value(0);
+                        c.tasks_hfclkstart().write_value(1);
+                        while c.events_hfclkstarted().read() == 0 {}
+                        c.events_hfclkstarted().write_value(0);
+                        wrote = true;
+                    }
                     let mut packet = Packet::default();
                     self.receive(&mut packet).await;
                     RECV_CHANNEL.send(packet).await;
@@ -306,7 +327,6 @@ impl<'a> Future for ReceiveFuture<'a> {
         let r = embassy_nrf::pac::RADIO;
         STATE.register(cx.waker());
         if r.events_disabled().read() != 0 {
-            info!("Data sent!");
             r.events_disabled().write_value(0);
             self.packet.addr = r.rxmatch().read().rxmatch();
             let res = if r.events_crcok().read() != 0 {

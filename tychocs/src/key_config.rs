@@ -8,21 +8,21 @@ pub fn set_keys(keys: &mut Keys<impl ConfigIndicator>) {
     // Layer 0
     keys.set_code(Single(KeyboardQq), 0, 0);
     keys.set_code(Single(KeyboardWw), 1, 0);
-    keys.set_code(Single(KeyboardFf), 2, 0);
-    keys.set_code(Single(KeyboardPp), 3, 0);
-    keys.set_code(Single(KeyboardBb), 4, 0);
+    keys.set_code(Single(KeyboardEe), 2, 0);
+    keys.set_code(Single(KeyboardRr), 3, 0);
+    keys.set_code(Single(KeyboardTt), 4, 0);
 
     keys.set_code(Single(KeyboardAa), 5, 0);
-    keys.set_code(Single(KeyboardRr), 6, 0);
-    keys.set_code(Single(KeyboardSs), 7, 0);
-    keys.set_code(Single(KeyboardTt), 8, 0);
+    keys.set_code(Single(KeyboardSs), 6, 0);
+    keys.set_code(Single(KeyboardDd), 7, 0);
+    keys.set_code(Single(KeyboardFf), 8, 0);
     keys.set_code(Single(KeyboardGg), 9, 0);
 
     keys.set_code(Single(KeyboardZz), 10, 0);
     keys.set_code(Single(KeyboardXx), 11, 0);
     keys.set_code(Single(KeyboardCc), 12, 0);
-    keys.set_code(Single(KeyboardDd), 13, 0);
-    keys.set_code(Single(KeyboardVv), 14, 0);
+    keys.set_code(Single(KeyboardVv), 13, 0);
+    keys.set_code(Single(KeyboardBb), 14, 0);
 
     keys.set_code(Single(Layer4), 15, 0);
     keys.set_code(
@@ -36,20 +36,20 @@ pub fn set_keys(keys: &mut Keys<impl ConfigIndicator>) {
     );
     keys.set_code(Single(KeyboardSpacebar), 17, 0);
 
-    keys.set_code(Single(KeyboardJj), 18, 0);
-    keys.set_code(Single(KeyboardLl), 19, 0);
-    keys.set_code(Single(KeyboardUu), 20, 0);
-    keys.set_code(Single(KeyboardYy), 21, 0);
-    keys.set_code(Single(KeyboardSemiColon), 22, 0);
+    keys.set_code(Single(KeyboardYy), 18, 0);
+    keys.set_code(Single(KeyboardUu), 19, 0);
+    keys.set_code(Single(KeyboardIi), 20, 0);
+    keys.set_code(Single(KeyboardOo), 21, 0);
+    keys.set_code(Single(KeyboardPp), 22, 0);
 
-    keys.set_code(Single(KeyboardMm), 23, 0);
-    keys.set_code(Single(KeyboardNn), 24, 0);
-    keys.set_code(Single(KeyboardEe), 25, 0);
-    keys.set_code(Single(KeyboardIi), 26, 0);
-    keys.set_code(Single(KeyboardOo), 27, 0);
+    keys.set_code(Single(KeyboardHh), 23, 0);
+    keys.set_code(Single(KeyboardJj), 24, 0);
+    keys.set_code(Single(KeyboardKk), 25, 0);
+    keys.set_code(Single(KeyboardLl), 26, 0);
+    keys.set_code(Single(KeyboardSemiColon), 27, 0);
 
-    keys.set_code(Single(KeyboardKk), 28, 0);
-    keys.set_code(Single(KeyboardHh), 29, 0);
+    keys.set_code(Single(KeyboardNn), 28, 0);
+    keys.set_code(Single(KeyboardMm), 29, 0);
     keys.set_code(Single(KeyboardCommaLess), 30, 0);
     keys.set_code(Single(KeyboardPeriodGreater), 31, 0);
     keys.set_code(Single(KeyboardSlashQuestion), 32, 0);

@@ -73,6 +73,7 @@ async fn radio_task(radio: Peri<'static, peripherals::RADIO>) {
         w.set_addr1(true);
         w.set_addr2(true);
     });
+    radio.set_tx_power(embassy_nrf::radio::TxPower::POS8_DBM);
     radio.run().await;
 }
 
