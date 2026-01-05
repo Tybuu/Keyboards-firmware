@@ -3,7 +3,7 @@
 
 use core::{mem, ops::Deref};
 
-use bruh78::radio::{self, Addresses, Packet, Radio, RadioClient};
+use bruh78::radio::{self, Addresses, Packet, Radio};
 use cortex_m_rt::entry;
 use defmt::{info, *};
 use embassy_executor::{Executor, InterruptExecutor, Spawner};

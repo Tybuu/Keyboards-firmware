@@ -15,6 +15,7 @@ use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pin, Pull};
 use embassy_nrf::interrupt;
 use embassy_nrf::interrupt::InterruptExt;
 use embassy_nrf::{bind_interrupts, peripherals, Peri};
+use embassy_time::Timer;
 use static_cell::StaticCell;
 
 use {defmt_rtt as _, panic_probe as _};
@@ -60,6 +61,15 @@ unsafe fn EGU1_SWI1() {
 }
 
 #[embassy_executor::task]
+async fn blinking_task(p: Peri<'static, embassy_nrf::peripherals::P0_15>) {
+    let mut out = Output::new(p, Level::Low, OutputDrive::Standard);
+    loop {
+        out.set_level((!out.is_set_high()).into());
+        Timer::after_secs(2).await;
+    }
+}
+
+#[embassy_executor::task]
 async fn keyboard_task(k: KeyboardResources) {
     let columns = [
         Output::new(k.out_0, Level::Low, OutputDrive::Standard),
@@ -88,6 +98,7 @@ async fn keyboard_task(k: KeyboardResources) {
             packet.copy_from_slice(&rep.to_le_bytes());
             send_packet(&packet).await;
         }
+        Timer::after_micros(5).await;
     }
 }
 
@@ -107,5 +118,6 @@ async fn main(_spawner: Spawner) {
     let executor = THREAD_EXECUTOR.init_with(Executor::new);
     executor.run(|spawner| {
         spawner.spawn(keyboard_task(r.keyboard)).unwrap();
+        // spawner.spawn(blinking_task(p.P0_15)).unwrap();
     });
 }

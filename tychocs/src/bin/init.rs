@@ -23,8 +23,6 @@ use panic_probe as _;
 use sequential_storage::cache::NoCache;
 use static_cell::StaticCell;
 
-static CACHE: StaticCell<NoCache> = StaticCell::new();
-
 bind_interrupts!(struct Irqs {
     USBD => usb::InterruptHandler<peripherals::USBD>;
     CLOCK_POWER => usb::vbus_detect::InterruptHandler;
@@ -37,7 +35,7 @@ async fn logger_task(driver: Driver<'static, USBD, HardwareVbusDetect>) {
 }
 
 #[embassy_executor::task]
-async fn storage_task(storage: Storage<Qspi<'static, peripherals::QSPI>, NoCache>) {
+async fn storage_task(storage: Storage<Qspi<'static, peripherals::QSPI>>) {
     storage.run_storage().await;
 }
 
@@ -47,7 +45,6 @@ async fn main(spawner: Spawner) {
     nrf_config.hfclk_source = HfclkSource::ExternalXtal;
     let p = embassy_nrf::init(nrf_config);
 
-    let cache = CACHE.init_with(NoCache::new);
     let mut qspi_config = embassy_nrf::qspi::Config::default();
     qspi_config.sck_delay = 5;
     qspi_config.read_opcode = embassy_nrf::qspi::ReadOpcode::READ4O;
@@ -76,7 +73,7 @@ async fn main(spawner: Spawner) {
     let driver = Driver::new(p.USBD, Irqs, HardwareVbusDetect::new(Irqs));
     spawner.spawn(logger_task(driver)).unwrap();
 
-    let storage = Storage::init(qspi_flash, 0..(4096 * 5), cache).await;
+    let storage = Storage::init(qspi_flash, 0..(4096 * 5)).await;
     spawner.spawn(storage_task(storage)).unwrap();
 
     let key = storage::StorageKey::KeyScanCode {

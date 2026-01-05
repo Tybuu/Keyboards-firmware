@@ -153,12 +153,13 @@ impl<'d> Radio<'d> {
         }
     }
 
-    async fn transmit_ack(&mut self, id: u8) {
+    async fn transmit_ack(&mut self, id: u8, addr: u8) {
         Timer::after_micros(40).await;
         let mut packet = Packet::default();
         packet.set_type(PacketType::Ack);
         packet.set_len(1);
         packet.set_id(id);
+        packet[0] = addr;
         info!("Ack sent for {}", id);
         self.send_inner(&mut packet).await;
     }
@@ -170,8 +171,9 @@ impl<'d> Radio<'d> {
         let receive_task = async {
             loop {
                 if ReceiveFuture::new(&mut packet).await.is_ok()
-                    && packet.packet_type().unwrap() == PacketType::Ack
+                    && packet.packet_type().is_ok_and(|x| x == PacketType::Ack)
                     && packet.id() == id
+                    && packet[0] == addr
                 {
                     break;
                 };
@@ -199,9 +201,9 @@ impl<'d> Radio<'d> {
         let r = embassy_nrf::pac::RADIO;
         loop {
             let res = ReceiveFuture::new(packet).await;
-            if res.is_ok() && packet.packet_type().unwrap() == PacketType::Data {
+            if res.is_ok() && packet.packet_type().is_ok_and(|x| x == PacketType::Data) {
                 let addr = r.rxmatch().read().rxmatch();
-                self.transmit_ack(packet.id()).await;
+                self.transmit_ack(packet.id(), addr).await;
 
                 // If packet_id is the same as the previous id, it must mean that the ack hasn't
                 // gone through so we'll discard the packet on the receiving end but send another

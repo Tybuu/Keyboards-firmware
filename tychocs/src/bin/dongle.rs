@@ -60,7 +60,7 @@ bind_interrupts!(struct Irqs {
 });
 
 #[embassy_executor::task]
-async fn storage_task(storage: Storage<Qspi<'static, peripherals::QSPI>, NoCache>) {
+async fn storage_task(storage: Storage<Qspi<'static, peripherals::QSPI>>) {
     storage.run_storage().await;
 }
 
