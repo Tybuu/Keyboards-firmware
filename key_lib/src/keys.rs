@@ -260,7 +260,9 @@ impl<I: ConfigIndicator> Keys<I> {
                 .try_into()
                 .map_err(|_| sequential_storage::map::SerializationError::InvalidFormat)?;
             reader.pop_slice(&mut buf[1..hid_type.get_len()]).await;
-            *code = ScanCodeBehavior::deserialize_from(&buf[..hid_type.get_len()]).unwrap();
+            *code = ScanCodeBehavior::deserialize_from(&buf[..hid_type.get_len()])
+                .unwrap()
+                .0;
         }
         if let Some(indicator) = self.indicator.as_ref() {
             indicator

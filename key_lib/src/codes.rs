@@ -1,7 +1,7 @@
 use core::mem;
 
 use num_enum::TryFromPrimitive;
-use sequential_storage::map::{SerializationError, Value, store_item};
+use sequential_storage::map::{SerializationError, Value};
 
 use crate::scan_codes::KeyCodes;
 
@@ -146,7 +146,7 @@ impl<'a> Value<'a> for ScanCodeBehavior {
 
     fn deserialize_from(
         buffer: &'a [u8],
-    ) -> Result<Self, sequential_storage::map::SerializationError>
+    ) -> Result<(Self, usize), sequential_storage::map::SerializationError>
     where
         Self: Sized,
     {
@@ -158,7 +158,7 @@ impl<'a> Value<'a> for ScanCodeBehavior {
                     Err(sequential_storage::map::SerializationError::BufferTooSmall)
                 } else {
                     let code = buffer[1].into();
-                    Ok(ScanCodeBehavior::Single(code))
+                    Ok((ScanCodeBehavior::Single(code), SINGLE_SERIAL_LENGTH))
                 }
             }
             HidScanCodeType::Double => {
@@ -167,7 +167,7 @@ impl<'a> Value<'a> for ScanCodeBehavior {
                 } else {
                     let code0 = buffer[1].into();
                     let code1 = buffer[2].into();
-                    Ok(ScanCodeBehavior::Double(code0, code1))
+                    Ok((ScanCodeBehavior::Double(code0, code1), DOUBLE_SERIAL_LENGTH))
                 }
             }
             HidScanCodeType::Triple => {
@@ -177,7 +177,10 @@ impl<'a> Value<'a> for ScanCodeBehavior {
                     let code0 = buffer[1].into();
                     let code1 = buffer[2].into();
                     let code2 = buffer[3].into();
-                    Ok(ScanCodeBehavior::Triple(code0, code1, code2))
+                    Ok((
+                        ScanCodeBehavior::Triple(code0, code1, code2),
+                        TRIPLE_SERIAL_LENGTH,
+                    ))
                 }
             }
             HidScanCodeType::CombinedKey => {
@@ -187,18 +190,24 @@ impl<'a> Value<'a> for ScanCodeBehavior {
                     let normal_code = buffer[1].into();
                     let combined_code = buffer[2].into();
                     let other_index = buffer[3] as usize;
-                    Ok(ScanCodeBehavior::CombinedKey {
-                        other_index,
-                        normal_code,
-                        combined_code,
-                    })
+                    Ok((
+                        ScanCodeBehavior::CombinedKey {
+                            other_index,
+                            normal_code,
+                            combined_code,
+                        },
+                        COMBINED_KEY_SERIAL_LENGTH,
+                    ))
                 }
             }
             HidScanCodeType::ChangeConfig => {
                 if buffer.len() < CHANGE_CONFIG_SERIAL_LENGTH {
                     Err(sequential_storage::map::SerializationError::BufferTooSmall)
                 } else {
-                    Ok(ScanCodeBehavior::ChangeConfig(buffer[1]))
+                    Ok((
+                        ScanCodeBehavior::ChangeConfig(buffer[1]),
+                        CHANGE_CONFIG_SERIAL_LENGTH,
+                    ))
                 }
             }
         }
@@ -239,7 +248,7 @@ impl<'a, const N: usize> Value<'a> for ScanCodeLayerStorage<N> {
 
     fn deserialize_from(
         buffer: &'a [u8],
-    ) -> Result<Self, sequential_storage::map::SerializationError>
+    ) -> Result<(Self, usize), sequential_storage::map::SerializationError>
     where
         Self: Sized,
     {
@@ -247,7 +256,7 @@ impl<'a, const N: usize> Value<'a> for ScanCodeLayerStorage<N> {
         let mut buf_i = 0;
         let mut code_i = 0;
         while buf_i < buffer.len() && code_i < N {
-            let code = ScanCodeBehavior::deserialize_from(&buffer[buf_i..])?;
+            let (code, _) = ScanCodeBehavior::deserialize_from(&buffer[buf_i..])?;
             codes.codes[code_i] = code;
             buf_i += code.into_buffer_len();
             code_i += 1;
@@ -255,7 +264,7 @@ impl<'a, const N: usize> Value<'a> for ScanCodeLayerStorage<N> {
         if code_i != N || buf_i != buffer.len() {
             Err(sequential_storage::map::SerializationError::InvalidFormat)
         } else {
-            Ok(codes)
+            Ok((codes, buffer.len()))
         }
     }
 }

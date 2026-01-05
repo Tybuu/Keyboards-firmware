@@ -8,9 +8,8 @@ use embassy_sync::{
 use embassy_time::Timer;
 use embedded_storage_async::nor_flash::NorFlash;
 use sequential_storage::{
-    cache::KeyCacheImpl,
-    erase_all,
-    map::{Value, fetch_item, store_item},
+    cache::{KeyCacheImpl, NoCache},
+    map::{Key, MapConfig, MapStorage, Value},
 };
 
 use crate::{NUM_KEYS, NUM_LAYERS, codes::ScanCodeLayerStorage};
@@ -44,9 +43,8 @@ impl StorageKey {
     }
 }
 
-pub struct Storage<S: NorFlash, K: KeyCacheImpl<InternalStorageKey> + 'static> {
-    flash_range: Range<u32>,
-    flash: Mutex<CriticalSectionRawMutex, (S, &'static mut K)>,
+pub struct Storage<S: NorFlash> {
+    map: Mutex<CriticalSectionRawMutex, MapStorage<InternalStorageKey, S, NoCache>>,
 }
 
 #[derive(Debug, Clone)]
@@ -54,35 +52,29 @@ pub enum StorageItem {
     Key(ScanCodeLayerStorage<NUM_KEYS>),
 }
 
-impl<S: NorFlash, K: KeyCacheImpl<InternalStorageKey> + 'static> Storage<S, K> {
+impl<S: NorFlash> Storage<S> {
     /// Returns Storage Struct. This method will clear
     /// the flash range if not intialized.
-    pub async fn init(mut flash: S, flash_range: Range<u32>, cache: &'static mut K) -> Self {
+    pub async fn init(mut flash: S, flash_range: Range<u32>) -> Self {
         info!("Init Stage");
         let mut data_buffer = [0; 128];
 
         Timer::after_millis(10).await;
 
+        let mut map: MapStorage<InternalStorageKey, S, NoCache> =
+            MapStorage::new(flash, MapConfig::new(flash_range), NoCache::default());
         // Check if the key value pair (0x0, 0x69) is in the map
         // If the pair is not in the map, it indicates that the
         // storage isn't initialized
-        match fetch_item::<InternalStorageKey, u32, _>(
-            &mut flash,
-            flash_range.clone(),
-            cache,
-            &mut data_buffer,
-            &StorageKey::StorageCheck.to_key(),
-        )
-        .await
+        match map
+            .fetch_item::<u32>(&mut data_buffer, &StorageKey::StorageCheck.to_key())
+            .await
         {
             Ok(res) => match res {
                 Some(val) => {
                     if val != 0x69 {
-                        erase_all(&mut flash, flash_range.clone()).await.unwrap();
-                        store_item(
-                            &mut flash,
-                            flash_range.clone(),
-                            cache,
+                        map.erase_all().await.unwrap();
+                        map.store_item(
                             &mut data_buffer,
                             &StorageKey::StorageCheck.to_key(),
                             &0x69u32,
@@ -95,11 +87,8 @@ impl<S: NorFlash, K: KeyCacheImpl<InternalStorageKey> + 'static> Storage<S, K> {
                     }
                 }
                 None => {
-                    erase_all(&mut flash, flash_range.clone()).await.unwrap();
-                    store_item(
-                        &mut flash,
-                        flash_range.clone(),
-                        cache,
+                    map.erase_all().await.unwrap();
+                    map.store_item(
                         &mut data_buffer,
                         &StorageKey::StorageCheck.to_key(),
                         &0x69u32,
@@ -114,24 +103,14 @@ impl<S: NorFlash, K: KeyCacheImpl<InternalStorageKey> + 'static> Storage<S, K> {
             }
         };
         Self {
-            flash: Mutex::new((flash, cache)),
-            flash_range,
+            map: Mutex::new(map),
         }
     }
 
     pub async fn store_item<'a, V: Value<'a>>(&self, key: InternalStorageKey, value: &V) {
         let mut buffer = [0; 256];
-        let (flash, cache) = &mut *(self.flash.lock().await);
-        match store_item(
-            flash,
-            self.flash_range.clone(),
-            cache.deref_mut(),
-            &mut buffer,
-            &key,
-            value,
-        )
-        .await
-        {
+        let mut map = self.map.lock().await;
+        match map.store_item(&mut buffer, &key, value).await {
             Ok(_) => info!("Item Stored succesfully"),
             Err(_) => error!("Failed to store item"),
         }
@@ -185,20 +164,13 @@ impl<S: NorFlash, K: KeyCacheImpl<InternalStorageKey> + 'static> Storage<S, K> {
         key: InternalStorageKey,
         buffer: &'a mut [u8],
     ) -> Result<Option<V>, sequential_storage::Error<S::Error>> {
-        let (flash, cache) = &mut *(self.flash.lock().await);
-        fetch_item(
-            flash,
-            self.flash_range.clone(),
-            cache.deref_mut(),
-            buffer,
-            &key,
-        )
-        .await
+        let mut map = self.map.lock().await;
+        map.fetch_item(buffer, &key).await
     }
 
     pub async fn clear(&self) {
-        let (flash, _) = &mut *(self.flash.lock().await);
-        erase_all(flash, self.flash_range.clone()).await.unwrap();
+        let mut map = self.map.lock().await;
+        map.erase_all().await.unwrap();
     }
 }
 
