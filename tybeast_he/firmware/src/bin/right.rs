@@ -14,7 +14,7 @@ use embassy_futures::join::{join, join3};
 use embassy_rp::adc::{self, Adc, Channel, Config as AdcConfig};
 use embassy_rp::gpio::{Input, Pull};
 use embassy_rp::pio::Pio;
-use embassy_rp::pio_programs::ws2812::{PioWs2812, PioWs2812Program};
+use embassy_rp::pio_programs::ws2812::{PioWs2812, PioWs2812Program, Rgb};
 use embassy_rp::{bind_interrupts, gpio, peripherals, usb};
 use embassy_time::Timer;
 
@@ -24,7 +24,9 @@ use embassy_usb::{Builder, Config, Handler};
 use gpio::{Level, Output};
 use key_lib::descriptor::{BufferReport, SlaveReport};
 use key_lib::keys::SlaveKeys;
-use key_lib::position::{DefaultSwitch, HeSwitch, KeySensors};
+use key_lib::position::{
+    DefaultSwitch, DigitalPosition, HeSwitch, KeySensors, KeyState, WootingPosition,
+};
 use key_lib::NUM_KEYS;
 use tybeast_ones_he::indicator::SlaveIndicatorTask;
 use tybeast_ones_he::sensors::HallEffectSensors;
@@ -36,6 +38,7 @@ bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<peripherals::USB>;
     ADC_IRQ_FIFO => adc::InterruptHandler;
     PIO0_IRQ_0 => embassy_rp::pio::InterruptHandler<peripherals::PIO0>;
+    DMA_IRQ_0 => embassy_rp::dma::InterruptHandler<peripherals::DMA_CH1>;
 });
 
 #[embassy_executor::main]
@@ -80,12 +83,16 @@ async fn main(_spawner: Spawner) {
 
     // Create classes on the builder.
     let key_config = embassy_usb::class::hid::Config {
+        hid_subclass: embassy_usb::class::hid::HidSubclass::No,
+        hid_boot_protocol: embassy_usb::class::hid::HidBootProtocol::None,
         report_descriptor: SlaveReport::desc(),
         request_handler: None,
         poll_ms: 1,
         max_packet_size: 64,
     };
     let com_config = embassy_usb::class::hid::Config {
+        hid_subclass: embassy_usb::class::hid::HidSubclass::No,
+        hid_boot_protocol: embassy_usb::class::hid::HidBootProtocol::None,
         report_descriptor: BufferReport::desc(),
         request_handler: None,
         poll_ms: 1,
@@ -118,7 +125,7 @@ async fn main(_spawner: Spawner) {
     ];
     find_order(&mut order);
 
-    let sensors = HallEffectSensors::new([a0, a1, a2, a3], [sel0, sel1, sel2], adc, order);
+    let mut sensors = HallEffectSensors::new([a0, a1, a2, a3], [sel0, sel1, sel2], adc, order);
 
     let slave_hid_task = HidSlaveTask::new();
 
@@ -126,14 +133,17 @@ async fn main(_spawner: Spawner) {
         mut common, sm0, ..
     } = Pio::new(p.PIO0, Irqs);
     let program = PioWs2812Program::new(&mut common);
-    let ws2812 = PioWs2812::new(&mut common, sm0, p.DMA_CH1, p.PIN_17, &program);
+    let ws2812: PioWs2812<_, _, _, Rgb> =
+        PioWs2812::with_color_order(&mut common, sm0, p.DMA_CH1, Irqs, p.PIN_17, &program);
     let indicator_task = SlaveIndicatorTask::new(ws2812, slave_hid_task.chan());
-    let mut keys = SlaveKeys::<HeSwitch, _, u32, _>::new(sensors, slave_hid_task.chan());
+    let mut keys = SlaveKeys::<u32, _>::new(slave_hid_task.chan());
 
     // Main keyboard loop
+    let mut positions = [WootingPosition::DEFAULT; NUM_KEYS / 2];
     let key_loop = async {
         loop {
-            let rep = keys.send_report().await;
+            sensors.update_positions(&mut positions).await;
+            let rep = keys.send_report(&positions).await;
             Timer::after_micros(5).await;
         }
     };

@@ -273,34 +273,22 @@ impl<I: ConfigIndicator> Keys<I> {
     }
 }
 
-pub struct SlaveKeys<K: KeyState<Item = KS::Item>, KS: KeySensors, SL: SlaveState, S: Slave> {
-    states: [K; NUM_KEYS / 2],
-    sensors: KS,
+pub struct SlaveKeys<SL: SlaveState, S: Slave> {
     slave_state: SL,
     slave_sender: S,
 }
 
-impl<K: KeyState<Item = KS::Item>, KS: KeySensors, SL: SlaveState, S: Slave<SlaveState = SL>>
-    SlaveKeys<K, KS, SL, S>
-{
-    pub fn new(sensors: KS, slave_sender: S) -> Self {
+impl<SL: SlaveState, S: Slave<SlaveState = SL>> SlaveKeys<SL, S> {
+    pub fn new(slave_sender: S) -> Self {
         Self {
-            states: [K::DEFAULT; NUM_KEYS / 2],
-            sensors,
             slave_state: SL::DEFAULT,
             slave_sender,
         }
     }
 
-    #[cfg(feature = "hall-effect")]
-    pub async fn setup_keys(&mut self) {
-        self.sensors.setup(&mut self.states).await;
-    }
-
-    pub async fn send_report(&mut self) {
-        self.sensors.update_positions(&mut self.states).await;
+    pub async fn send_report<K: KeyState>(&mut self, states: &[K]) {
         let mut new_state = SL::DEFAULT;
-        for (i, state) in self.states.iter().enumerate() {
+        for (i, state) in states.iter().enumerate() {
             new_state.update_state(i, state.is_pressed());
         }
         if new_state != self.slave_state {

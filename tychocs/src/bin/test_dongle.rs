@@ -3,7 +3,7 @@
 
 use core::{mem, ops::Deref};
 
-use bruh78::radio::{self, Addresses, Packet, Radio};
+use bruh78::radio::{self, receive_packet, Addresses, Packet, Radio};
 use cortex_m_rt::entry;
 use defmt::{info, *};
 use embassy_executor::{Executor, InterruptExecutor, Spawner};
@@ -55,10 +55,9 @@ async fn radio_task(radio: Peri<'static, peripherals::RADIO>) {
 
 #[embassy_executor::task]
 async fn thread_task() {
-    let client = RadioClient {};
     let master_loop = async {
         loop {
-            let data = client.receive_packet().await;
+            let data = receive_packet().await;
             log::info!("Received {:?}", &data[..]);
             Timer::after_millis(1).await;
         }

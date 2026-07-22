@@ -1,5 +1,3 @@
-use std::future;
-
 use async_hid::{AsyncHidRead, AsyncHidWrite, Device, DeviceId, DeviceReader, DeviceWriter};
 use async_hid::{DeviceInfo, HidBackend, HidResult};
 use futures::StreamExt;
@@ -11,12 +9,12 @@ const USAGE: u16 = 0x2;
 #[tokio::main]
 async fn main() {
     env_logger::init();
-    log::info!("hello");
+    log::debug!("hello");
     let (l_sender, l_rec) = mpsc::channel(10);
     let (r_sender, r_rec) = mpsc::channel(10);
-    let l_future = run_device(r_rec, l_sender, USAGE_PAGE, USAGE, 0xa55, 0xa55);
-    let r_future = run_device(l_rec, r_sender, USAGE_PAGE, USAGE, 0x727, 0x727);
-    join!(l_future, r_future);
+    let l_future = tokio::spawn(run_device(r_rec, l_sender, USAGE_PAGE, USAGE, 0xa55, 0xa55));
+    let r_future = tokio::spawn(run_device(l_rec, r_sender, USAGE_PAGE, USAGE, 0x727, 0x727));
+    let _ = join!(l_future, r_future);
 }
 
 async fn open_device(
@@ -26,7 +24,7 @@ async fn open_device(
     vendor_id: u16,
     product_id: u16,
 ) -> Device {
-    log::info!(
+    log::debug!(
         "Finding Device {:x}:{:x} | Usage Page: {:x} | Usage: {}",
         vendor_id,
         product_id,
@@ -37,7 +35,7 @@ async fn open_device(
     let mut devices = backend.enumerate().await.unwrap();
     while let Some(new_dev) = devices.next().await {
         if new_dev.matches(usage_page, usage_id, vendor_id, product_id) {
-            log::info!(
+            log::debug!(
                 "Connected to Device {:x}:{:x} | Usage Page: {:x} | Usage: {}",
                 vendor_id,
                 product_id,
@@ -52,14 +50,14 @@ async fn open_device(
         while let Some(event) = watch.next().await {
             match event {
                 async_hid::DeviceEvent::Connected(device_id) => {
-                    log::info!("Device connected! {:?}", device_id);
+                    log::debug!("Device connected! {:?}", device_id);
                     let res = backend
                         .query_devices(&device_id)
                         .await
                         .unwrap()
                         .find(|dev| dev.matches(usage_page, usage_id, vendor_id, product_id));
                     if let Some(dev) = res {
-                        log::info!(
+                        log::debug!(
                             "Connected to Device {:x}:{:x} | Usage Page: {:x} | Usage: {}",
                             vendor_id,
                             product_id,
@@ -69,7 +67,7 @@ async fn open_device(
                         return dev;
                     }
                 }
-                async_hid::DeviceEvent::Disconnected(device_id) => {}
+                async_hid::DeviceEvent::Disconnected(_) => {}
             }
         }
     }
@@ -93,7 +91,7 @@ pub async fn run_device(
                 let mut buf = [0u8; 33];
                 match reader.read_input_report(&mut buf[1..]).await {
                     Ok(_) => {
-                        log::info!("From {:x}:{:x} | {:?}", vendor_id, product_id, buf);
+                        log::debug!("From {:x}:{:x} | {:?}", vendor_id, product_id, buf);
                         sender.send(buf).await.unwrap();
                     }
                     Err(_) => {
@@ -117,6 +115,6 @@ pub async fn run_device(
             _ = read_loop => {},
             _ = write_loop => {}
         }
-        log::info!("Device {:x}:{:x} closed", vendor_id, product_id);
+        log::debug!("Device {:x}:{:x} closed", vendor_id, product_id);
     }
 }

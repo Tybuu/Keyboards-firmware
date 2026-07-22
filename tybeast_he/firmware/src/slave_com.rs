@@ -18,6 +18,7 @@ const CHANNEL_SIZE: usize = 5;
 
 pub enum HidRequest {
     ConfigIndicate(u8),
+    SlaveReport(u32),
     HallEffectReading(u8),
 }
 
@@ -28,6 +29,11 @@ impl HidRequest {
                 buf[0] = self.index() as u8;
                 buf[1] = val;
                 2
+            }
+            HidRequest::SlaveReport(rep) => {
+                buf[0] = self.index() as u8;
+                buf[1..5].copy_from_slice(&rep.to_le_bytes());
+                5
             }
             HidRequest::HallEffectReading(i) => {
                 buf[0] = self.index() as u8;
@@ -40,14 +46,19 @@ impl HidRequest {
     pub fn index(&self) -> usize {
         match self {
             Self::ConfigIndicate(_) => 0,
-            Self::HallEffectReading(_) => 1,
+            Self::SlaveReport(_) => 1,
+            Self::HallEffectReading(_) => 2,
         }
     }
 
     pub fn get_request(buf: &[u8]) -> Option<HidRequest> {
         match buf[0] {
             0 => Some(Self::ConfigIndicate(buf[1])),
-            1 => Some(Self::HallEffectReading(buf[1])),
+            1 => {
+                let res = u32::from_le_bytes(buf[1..5].try_into().unwrap());
+                Some(Self::SlaveReport(res))
+            }
+            2 => Some(Self::HallEffectReading(buf[1])),
             _ => None,
         }
     }
@@ -76,7 +87,7 @@ impl HidResponse {
 
     pub const fn index(&self) -> usize {
         match self {
-            HidResponse::HallEffectReading(_) => 1,
+            HidResponse::HallEffectReading(_) => 2,
         }
     }
 
@@ -233,6 +244,26 @@ impl HidSlaveTask {
             }
         };
         join(read_loop, write_loop).await;
+    }
+}
+
+impl<'ch> Slave for HidMaster<'ch> {
+    type Request = HidRequest;
+
+    type Response = HidResponse;
+
+    type SlaveState = u32;
+
+    async fn send_response(&self, message: Self::Response) {
+        todo!()
+    }
+
+    async fn send_slave_state(&self, state: Self::SlaveState) {
+        self.requests.send(HidRequest::SlaveReport(state)).await;
+    }
+
+    async fn get_request(&self) -> Self::Request {
+        todo!()
     }
 }
 

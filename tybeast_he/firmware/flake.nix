@@ -1,6 +1,6 @@
 {
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/25.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     rust-overlay.url = "github:oxalica/rust-overlay";
   };
 
@@ -15,7 +15,6 @@
       inherit overlays;
     };
   in {
-    packages.x86_64-linux.elf2uf2-rs = pkgs.callPackage ./elf.nix {};
     devShell.x86_64-linux = pkgs.mkShell {
       buildInputs = [
         (pkgs.rust-bin.selectLatestNightlyWith (toolchain:
@@ -24,9 +23,9 @@
             extensions = ["rust-src" "rust-analyzer"];
           }))
         # pkgs.rust-analyzer
+        pkgs.elf2uf2-rs
         pkgs.flip-link
-        pkgs.probe-rs
-        self.packages.x86_64-linux.elf2uf2-rs
+        pkgs.probe-rs-tools
         pkgs.rustfmt
         pkgs.gcc-arm-embedded
       ];

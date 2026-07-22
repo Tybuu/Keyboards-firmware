@@ -1,6 +1,6 @@
 {
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/25.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     rust-overlay.url = "github:oxalica/rust-overlay";
   };
 
@@ -23,7 +23,7 @@
             extensions = ["rust-src" "rust-analyzer"];
           }))
         pkgs.flip-link
-        pkgs.probe-rs
+        pkgs.probe-rs-tools
         pkgs.rustfmt
         pkgs.gcc-arm-embedded
       ];

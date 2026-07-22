@@ -116,11 +116,13 @@ impl<'d, T: Driver<'d>> ContinuousReader<'d, T> {
 }
 
 #[repr(u8)]
-enum HidRequest {
+pub enum HidRequest {
     UpdateKeys = 0,
     KeyboardInfo = 1,
     WriteToFlash = 2,
     KeyboardMetaInfo = 3,
+    CurrentMode = 4,
+    ToggleSlave = 5,
 }
 
 impl From<u8> for HidRequest {
@@ -130,19 +132,114 @@ impl From<u8> for HidRequest {
             1 => Self::KeyboardInfo,
             2 => Self::WriteToFlash,
             3 => Self::KeyboardMetaInfo,
+            4 => Self::CurrentMode,
+            5 => Self::ToggleSlave,
             _ => todo!(),
         }
     }
 }
-pub struct Com<'a, 'd, M: RawMutex, T: Driver<'d>, I: ConfigIndicator> {
-    keys: &'a Mutex<M, Keys<I>>,
+
+pub trait KeyboardState {
+    fn handle_request<'d, T: Driver<'d>>(
+        &self,
+        request: HidRequest,
+        reader: &mut ContinuousReader<'d, T>,
+        writer: &mut ContinuousWriter<'d, T>,
+    ) -> impl Future<Output = ()>;
+}
+
+impl<M: RawMutex, I: ConfigIndicator> KeyboardState for Mutex<M, Keys<I>> {
+    async fn handle_request<'d, T: Driver<'d>>(
+        &self,
+        hid_request: HidRequest,
+        reader: &mut ContinuousReader<'d, T>,
+        writer: &mut ContinuousWriter<'d, T>,
+    ) {
+        match hid_request {
+            HidRequest::UpdateKeys => {
+                let config_num = reader.pop().await as usize;
+                let mut keys = self.lock().await;
+                match keys.load_keys_from_com(reader, config_num).await {
+                    Ok(_) => {
+                        info!("Finished Receiving bytes");
+                    }
+                    Err(_) => {
+                        error!("Unable to read from com to deserialzie keyboard config");
+                        let _ = keys.load_keys_from_storage(0).await;
+                    }
+                }
+                drop(keys);
+            }
+            HidRequest::KeyboardInfo => {
+                info!("Sending keyboard config!");
+                let mut default_keys = Keys::default();
+                for config_num in 0..NUM_CONFIGS {
+                    let start = Instant::now();
+                    let lock = self.lock().await;
+                    let keys = if lock.config_num == config_num {
+                        lock.deref()
+                    } else {
+                        drop(lock);
+                        let _ = default_keys.load_keys_from_storage(config_num).await;
+                        &default_keys
+                    };
+                    let load_time = Instant::now();
+                    keys.write_keys_to_com(writer).await;
+                    let write_time = Instant::now();
+                    info!(
+                        "Writing to com config {} | Write Time : {}ms | Load Time : {}ms",
+                        config_num,
+                        (write_time - load_time).as_millis(),
+                        (load_time - start).as_millis(),
+                    );
+                }
+                writer.flush().await;
+                info!("Finished sending keyboard config!");
+            }
+            HidRequest::WriteToFlash => {
+                let mut default_keys = Keys::default();
+                for config_num in 0..NUM_CONFIGS {
+                    let mut lock = self.lock().await;
+                    let keys = if lock.config_num == config_num {
+                        lock.deref_mut()
+                    } else {
+                        drop(lock);
+                        &mut default_keys
+                    };
+                    keys.load_keys_from_com(reader, config_num).await.unwrap();
+                    info!("Succesfully loaded config {}!", config_num);
+                    keys.write_keys_to_storage(config_num).await;
+                }
+                info!("Finished writing config to storage");
+            }
+            HidRequest::KeyboardMetaInfo => {
+                info!("Requested Keyboard meta info!");
+                writer
+                    .write(&[
+                        NUM_CONFIGS as u8,
+                        NUM_KEYS as u8,
+                        NUM_LAYERS as u8,
+                        IS_SPLIT as u8,
+                    ])
+                    .await;
+                writer.flush().await;
+            }
+            HidRequest::CurrentMode => {
+                writer.write(&[0]).await;
+            }
+            HidRequest::ToggleSlave => {}
+        }
+    }
+}
+pub struct Com<'a, 'd, T: Driver<'d>, K: KeyboardState> {
+    keys: &'a K,
     reader: ContinuousReader<'d, T>,
     writer: ContinuousWriter<'d, T>,
 }
 
-impl<'a, 'd, M: RawMutex, T: Driver<'d>, I: ConfigIndicator> Com<'a, 'd, M, T, I> {
+impl<'a, 'd, K: KeyboardState, T: Driver<'d>> Com<'a, 'd, T, K> {
     pub fn new(
-        keys: &'a Mutex<M, Keys<I>>,
+        keys: &'a K,
         reader: HidReader<'d, T, BUFFER_SIZE>,
         writer: HidWriter<'d, T, BUFFER_SIZE>,
     ) -> Self {
@@ -157,78 +254,9 @@ impl<'a, 'd, M: RawMutex, T: Driver<'d>, I: ConfigIndicator> Com<'a, 'd, M, T, I
         self.reader.reader.ready().await;
         loop {
             let hid_request = self.reader.pop().await.into();
-            match hid_request {
-                HidRequest::UpdateKeys => {
-                    let config_num = self.reader.pop().await as usize;
-                    let mut keys = self.keys.lock().await;
-                    match keys.load_keys_from_com(&mut self.reader, config_num).await {
-                        Ok(_) => {
-                            info!("Finished Receiving bytes");
-                        }
-                        Err(_) => {
-                            error!("Unable to read from com to deserialzie keyboard config");
-                            let _ = keys.load_keys_from_storage(0).await;
-                        }
-                    }
-                    drop(keys);
-                }
-                HidRequest::KeyboardInfo => {
-                    info!("Sending keyboard config!");
-                    let mut default_keys = Keys::default();
-                    for config_num in 0..NUM_CONFIGS {
-                        let start = Instant::now();
-                        let lock = self.keys.lock().await;
-                        let keys = if lock.config_num == config_num {
-                            lock.deref()
-                        } else {
-                            drop(lock);
-                            let _ = default_keys.load_keys_from_storage(config_num).await;
-                            &default_keys
-                        };
-                        let load_time = Instant::now();
-                        keys.write_keys_to_com(&mut self.writer).await;
-                        let write_time = Instant::now();
-                        info!(
-                            "Writing to com config {} | Write Time : {}ms | Load Time : {}ms",
-                            config_num,
-                            (write_time - load_time).as_millis(),
-                            (load_time - start).as_millis(),
-                        );
-                    }
-                    self.writer.flush().await;
-                    info!("Finished sending keyboard config!");
-                }
-                HidRequest::WriteToFlash => {
-                    let mut default_keys = Keys::default();
-                    for config_num in 0..NUM_CONFIGS {
-                        let mut lock = self.keys.lock().await;
-                        let keys = if lock.config_num == config_num {
-                            lock.deref_mut()
-                        } else {
-                            drop(lock);
-                            &mut default_keys
-                        };
-                        keys.load_keys_from_com(&mut self.reader, config_num)
-                            .await
-                            .unwrap();
-                        info!("Succesfully loaded config {}!", config_num);
-                        keys.write_keys_to_storage(config_num).await;
-                    }
-                    info!("Finished writing config to storage");
-                }
-                HidRequest::KeyboardMetaInfo => {
-                    info!("Requested Keyboard meta info!");
-                    self.writer
-                        .write(&[
-                            NUM_CONFIGS as u8,
-                            NUM_KEYS as u8,
-                            NUM_LAYERS as u8,
-                            IS_SPLIT as u8,
-                        ])
-                        .await;
-                    self.writer.flush().await;
-                }
-            }
+            self.keys
+                .handle_request(hid_request, &mut self.reader, &mut self.writer)
+                .await;
             self.reader.flush();
         }
     }

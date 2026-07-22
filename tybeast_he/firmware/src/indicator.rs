@@ -1,15 +1,8 @@
-use core::{cell::RefCell, future::Future, marker::PhantomData};
-
 use embassy_rp::{
-    pio::{Common, Instance, StateMachine},
-    pio_programs::ws2812::PioWs2812,
-    Peri,
+    pio::Instance,
+    pio_programs::ws2812::{PioWs2812, Rgb},
 };
-use embassy_sync::{
-    blocking_mutex::raw::{CriticalSectionRawMutex, ThreadModeRawMutex},
-    channel::{Channel, Receiver, Sender, TrySendError},
-    mutex::Mutex,
-};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use key_lib::{
     keys::{ConfigIndicator, Indicate},
     slave_com::Master,
@@ -22,7 +15,7 @@ const VAL: u8 = 10;
 static CHAN: Channel<CriticalSectionRawMutex, Indicate, 10> = Channel::new();
 
 pub struct MasterIndicatorTask<'d, 'ch, P: Instance, const S: usize> {
-    pio: PioWs2812<'d, P, S, 1>,
+    pio: PioWs2812<'d, P, S, 1, Rgb>,
     hid_chan: HidMaster<'ch>,
     config_num: usize,
     suspended: bool,
@@ -30,7 +23,7 @@ pub struct MasterIndicatorTask<'d, 'ch, P: Instance, const S: usize> {
 }
 
 impl<'d, 'ch, P: Instance, const S: usize> MasterIndicatorTask<'d, 'ch, P, S> {
-    pub fn new(pio: PioWs2812<'d, P, S, 1>, hid_chan: HidMaster<'ch>) -> Self {
+    pub fn new(pio: PioWs2812<'d, P, S, 1, Rgb>, hid_chan: HidMaster<'ch>) -> Self {
         Self {
             pio,
             hid_chan,
@@ -100,12 +93,12 @@ impl ConfigIndicator for Indicator {
 }
 
 pub struct SlaveIndicatorTask<'d, 'ch, P: Instance, const S: usize> {
-    pio: PioWs2812<'d, P, S, 1>,
+    pio: PioWs2812<'d, P, S, 1, Rgb>,
     hid_chan: HidSlave<'ch>,
 }
 
 impl<'d, 'ch, P: Instance, const S: usize> SlaveIndicatorTask<'d, 'ch, P, S> {
-    pub fn new(pio: PioWs2812<'d, P, S, 1>, hid_chan: HidSlave<'ch>) -> Self {
+    pub fn new(pio: PioWs2812<'d, P, S, 1, Rgb>, hid_chan: HidSlave<'ch>) -> Self {
         Self { pio, hid_chan }
     }
 

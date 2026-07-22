@@ -20,6 +20,11 @@ fn set_bit(num: &mut u8, bit: u8, pos: u8) {
     }
 }
 
+fn set_bit_u32(num: u32, bit: u8, pos: u8) -> u32 {
+    let mask = 1 << pos;
+    if bit == 1 { num | mask } else { num & !mask }
+}
+
 enum State {
     Stick(u8),
     Pressed,
@@ -90,7 +95,7 @@ impl MouseDelta {
     }
 }
 
-pub struct Report<S: KeySensors, K: KeyState<Item = S::Item>> {
+pub struct Report {
     key_report: KeyboardReportNKRO,
     mouse_report: MouseReport,
     mouse_delta: MouseDelta,
@@ -98,12 +103,10 @@ pub struct Report<S: KeySensors, K: KeyState<Item = S::Item>> {
     current_layer: usize,
     reset_layer: usize,
     stick: State,
-    sensors: S,
-    positions: [K; NUM_KEYS],
 }
 
-impl<S: KeySensors, K: KeyState<Item = S::Item>> Report<S, K> {
-    pub fn new(sensors: S) -> Self {
+impl Report {
+    pub fn new() -> Self {
         Self {
             key_report: KeyboardReportNKRO::default(),
             mouse_report: MouseReport::default(),
@@ -112,39 +115,46 @@ impl<S: KeySensors, K: KeyState<Item = S::Item>> Report<S, K> {
             current_layer: 0,
             reset_layer: 0,
             stick: State::None,
-            sensors,
-            positions: [K::DEFAULT; NUM_KEYS],
         }
     }
 
     /// Generates a report with the provided keys. Returns a option tuple
     /// where it returns a Some when a report need to be sent
-    pub async fn generate_report<M: RawMutex, I: ConfigIndicator>(
+    pub async fn generate_report<I: ConfigIndicator, K: KeyState, M: RawMutex>(
         &mut self,
         keys: &Mutex<M, Keys<I>>,
+        positions: &[K; NUM_KEYS],
     ) -> (Option<&KeyboardReportNKRO>, Option<&MouseReport>) {
         let mut new_layer = None;
-        let mut pressed_keys = Vec::<ReportCodes, 64>::new();
+        let mut pressed_keys = Vec::new();
         let mut new_key_report = KeyboardReportNKRO::default();
         let mut new_mouse_report = MouseReport::default();
         let mut pressed = false;
         let mut stick = false;
         let mut toggle = false;
-        self.sensors.update_positions(&mut self.positions).await;
-        let mut keys = keys.lock().await;
-        keys.get_keys(self.current_layer, &mut pressed_keys, &self.positions)
+        keys.lock()
+            .await
+            .get_keys(self.current_layer, &mut pressed_keys, positions)
             .await;
-        drop(keys);
-        for key in &pressed_keys {
+        for key in pressed_keys {
             match key {
                 ReportCodes::Modifier(code) => {
                     let b_idx = code % 8;
                     set_bit(&mut new_key_report.modifier, 1, b_idx);
                 }
                 ReportCodes::Letter(code) => {
-                    let n_idx = (code / 8) as usize;
-                    let b_idx = code % 8;
-                    set_bit(&mut new_key_report.nkro_keycodes[n_idx], 1, b_idx);
+                    let n_idx = (code / 32) as usize;
+                    let b_idx = code % 32;
+                    match n_idx {
+                        0 => new_key_report.nkro_0 = set_bit_u32(new_key_report.nkro_0, 1, b_idx),
+                        1 => new_key_report.nkro_1 = set_bit_u32(new_key_report.nkro_1, 1, b_idx),
+                        2 => new_key_report.nkro_2 = set_bit_u32(new_key_report.nkro_2, 1, b_idx),
+                        3 => new_key_report.nkro_3 = set_bit_u32(new_key_report.nkro_3, 1, b_idx),
+                        4 => new_key_report.nkro_4 = set_bit_u32(new_key_report.nkro_4, 1, b_idx),
+                        5 => new_key_report.nkro_5 = set_bit_u32(new_key_report.nkro_5, 1, b_idx),
+                        6 => new_key_report.nkro_6 = set_bit_u32(new_key_report.nkro_6, 1, b_idx),
+                        _ => {}
+                    }
                     pressed = true;
                 }
                 ReportCodes::MouseButton(code) => {
@@ -236,9 +246,9 @@ impl<S: KeySensors, K: KeyState<Item = S::Item>> Report<S, K> {
         match new_layer {
             Some(layer) => {
                 if toggle {
-                    self.reset_layer = *layer as usize;
+                    self.reset_layer = layer as usize;
                 }
-                self.current_layer = *layer as usize;
+                self.current_layer = layer as usize;
             }
             None => {
                 self.current_layer = self.reset_layer;
