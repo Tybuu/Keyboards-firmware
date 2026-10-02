@@ -8,7 +8,7 @@ use embassy_sync::{
 use embassy_time::Timer;
 use embedded_storage_async::nor_flash::NorFlash;
 use sequential_storage::{
-    cache::{KeyCacheImpl, NoCache},
+    cache::{self, Cache, Uncached},
     map::{Key, MapConfig, MapStorage, Value},
 };
 
@@ -44,7 +44,10 @@ impl StorageKey {
 }
 
 pub struct Storage<S: NorFlash> {
-    map: Mutex<CriticalSectionRawMutex, MapStorage<InternalStorageKey, S, NoCache>>,
+    map: Mutex<
+        CriticalSectionRawMutex,
+        MapStorage<InternalStorageKey, S, Cache<Uncached, Uncached, Uncached, InternalStorageKey>>,
+    >,
 }
 
 #[derive(Debug, Clone)]
@@ -55,14 +58,14 @@ pub enum StorageItem {
 impl<S: NorFlash> Storage<S> {
     /// Returns Storage Struct. This method will clear
     /// the flash range if not intialized.
-    pub async fn init(mut flash: S, flash_range: Range<u32>) -> Self {
+    pub async fn init(flash: S, flash_range: Range<u32>) -> Self {
         info!("Init Stage");
         let mut data_buffer = [0; 128];
 
         Timer::after_millis(10).await;
 
-        let mut map: MapStorage<InternalStorageKey, S, NoCache> =
-            MapStorage::new(flash, MapConfig::new(flash_range), NoCache::default());
+        let mut map: MapStorage<InternalStorageKey, S, _> =
+            MapStorage::new(flash, MapConfig::new(flash_range), Cache::new_uncached());
         // Check if the key value pair (0x0, 0x69) is in the map
         // If the pair is not in the map, it indicates that the
         // storage isn't initialized

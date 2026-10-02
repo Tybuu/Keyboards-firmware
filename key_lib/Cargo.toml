@@ -24,17 +24,17 @@ usbd-hid = "0.10.0"
 embedded-hal-1 = { package = "embedded-hal", version = "1.0" }
 embedded-hal-async = "1.0"
 embedded-hal-bus = { version = "0.3", features = ["async"] }
-embedded-io-async = { version = "0.6.1", features = ["defmt-03"] }
+embedded-io-async = { version = "0.7.0", features = ["defmt"] }
 embedded-storage = { version = "0.3" }
 static_cell = "2"
 portable-atomic = { version = "1.5", features = ["critical-section"] }
 log = "0.4"
-embedded-sdmmc = "0.9.0"
+embedded-sdmmc = "0.10.0"
 num_enum = {version = "*", default-features = false}
 
-sequential-storage = "*"
-embedded-storage-async = "*"
-embedded-io = "*"
+sequential-storage = "8.0.1"
+embedded-storage-async = "0.4.2"
+embedded-io = "0.7.1"
 
 [profile.release]
 debug = 2
