@@ -62,7 +62,7 @@ async fn main(_spawner: Spawner) {
     let mut config = Config::new(0xa55, 0xa55);
     config.manufacturer = Some("Tybeast Corp.");
     config.product = Some("Tybeast Ones HE (Left)");
-    config.max_power = 500;
+    config.max_power = 400;
     config.max_packet_size_0 = 64;
     config.composite_with_iads = true;
     config.device_class = 0xef;

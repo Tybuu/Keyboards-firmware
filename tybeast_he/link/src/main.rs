@@ -94,7 +94,8 @@ pub async fn run_device(
                         log::debug!("From {:x}:{:x} | {:?}", vendor_id, product_id, buf);
                         sender.send(buf).await.unwrap();
                     }
-                    Err(_) => {
+                    Err(e) => {
+                        log::debug!("{:x}:{:x} read error: {:?}", vendor_id, product_id, e);
                         break;
                     }
                 }
@@ -106,6 +107,7 @@ pub async fn run_device(
                 match writer.write_output_report(&buf).await {
                     Ok(_) => {}
                     Err(_) => {
+                        log::debug!("{:x}:{:x} write error: {:?}", vendor_id, product_id, e);
                         break;
                     }
                 }
