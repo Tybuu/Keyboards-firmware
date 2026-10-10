@@ -106,7 +106,7 @@ pub async fn run_device(
                 let buf = rec.recv().await.unwrap();
                 match writer.write_output_report(&buf).await {
                     Ok(_) => {}
-                    Err(_) => {
+                    Err(e) => {
                         log::debug!("{:x}:{:x} write error: {:?}", vendor_id, product_id, e);
                         break;
                     }
