@@ -10,8 +10,8 @@ const USAGE: u16 = 0x2;
 async fn main() {
     env_logger::init();
     log::debug!("hello");
-    let (l_sender, l_rec) = mpsc::channel(10);
-    let (r_sender, r_rec) = mpsc::channel(10);
+    let (l_sender, l_rec) = mpsc::channel(100);
+    let (r_sender, r_rec) = mpsc::channel(100);
     let l_future = tokio::spawn(run_device(r_rec, l_sender, USAGE_PAGE, USAGE, 0xa55, 0xa55));
     let r_future = tokio::spawn(run_device(l_rec, r_sender, USAGE_PAGE, USAGE, 0x727, 0x727));
     let _ = join!(l_future, r_future);

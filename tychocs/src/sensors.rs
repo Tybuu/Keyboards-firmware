@@ -1,15 +1,16 @@
 use core::{future::Future, marker::PhantomData, ops::Range};
 
+use defmt::info;
 use embassy_futures::select::{select4, select_array, select_slice};
 use embassy_nrf::{
     gpio::{AnyPin, Input, Output},
-    gpiote::{AnyChannel, InputChannel},
+    gpiote::InputChannel,
 };
 use embassy_time::{Duration, Instant};
 use heapless::Vec;
 use key_lib::{position::KeySensors, NUM_KEYS};
 
-use crate::radio::receive_packet;
+use crate::radio::Radio;
 
 const DEBOUNCE_TIME: u64 = 5;
 #[derive(Copy, Clone, Debug)]
@@ -144,15 +145,17 @@ impl<'a, const INPUT_SIZE: usize, const OUTPUT_SIZE: usize> Matrix<'a, INPUT_SIZ
     }
 }
 
-pub struct DongleSensors {}
+pub struct DongleSensors<'d> {
+    rad: Radio<'d>,
+}
 
-impl DongleSensors {
-    pub fn new() -> Self {
-        Self {}
+impl<'d> DongleSensors<'d> {
+    pub fn new(rad: Radio<'d>) -> Self {
+        Self { rad }
     }
 }
 
-impl KeySensors for DongleSensors {
+impl<'d> KeySensors for DongleSensors<'d> {
     type Item = bool;
 
     async fn update_positions<K: key_lib::position::KeyState<Item = Self::Item>>(
@@ -160,7 +163,7 @@ impl KeySensors for DongleSensors {
         positions: &mut [K],
     ) {
         const OFFSET: usize = NUM_KEYS / 2;
-        let states = receive_packet().await;
+        let states = self.rad.receive_packet().await;
         let key_states = u32::from_le_bytes(states[0..4].try_into().unwrap());
         let addr = states.addr;
         if addr == 1 {

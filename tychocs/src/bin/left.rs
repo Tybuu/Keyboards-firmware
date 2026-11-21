@@ -6,7 +6,7 @@
 #![no_main]
 
 use assign_resources::assign_resources;
-use bruh78::radio::{self, send_packet, Addresses, Packet, Radio};
+use bruh78::radio::{self, Addresses, Packet, Radio};
 use bruh78::sensors::Matrix;
 use cortex_m_rt::entry;
 use embassy_executor::{Executor, InterruptExecutor, Spawner};
@@ -23,7 +23,8 @@ static RADIO_EXECUTOR: InterruptExecutor = InterruptExecutor::new();
 static THREAD_EXECUTOR: StaticCell<Executor> = StaticCell::new();
 
 bind_interrupts!(struct Irqs {
-    RADIO => radio::InterruptHandler;
+    RADIO => radio::RadioInterruptHandler;
+    TIMER0 => radio::RadioTimerInterrupt;
 });
 
 assign_resources! {
@@ -40,22 +41,12 @@ assign_resources! {
     },
     radio: RadioResources {
         rad: RADIO,
+        timer: TIMER0,
     }
 }
 
 #[embassy_executor::task]
-async fn radio_task(r: RadioResources) {
-    let addresses = Addresses::default();
-    let mut radio = Radio::new(r.rad, Irqs, addresses);
-    radio.set_tx_addresses(|w| w.set_txaddress(1));
-    radio.set_rx_addresses(|w| {
-        w.set_addr0(true);
-    });
-    radio.run().await;
-}
-
-#[embassy_executor::task]
-async fn keyboard_task(k: KeyboardResources) {
+async fn keyboard_task(k: KeyboardResources, r: RadioResources) {
     let columns = [
         Output::new(k.out_0, Level::Low, OutputDrive::Standard),
         Output::new(k.out_1, Level::Low, OutputDrive::Standard),
@@ -73,6 +64,13 @@ async fn keyboard_task(k: KeyboardResources) {
 
     let mut matrix = Matrix::new(columns, rows);
     matrix.disable_debouncer(15..17);
+
+    let addresses = Addresses::default();
+    let mut radio = Radio::new(r.rad, r.timer, Irqs, Irqs, addresses);
+    radio.set_tx_addresses(|w| w.set_txaddress(1));
+    radio.set_rx_addresses(|w| {
+        w.set_addr0(true);
+    });
     let mut rep = 0;
     loop {
         matrix.update().await;
@@ -81,15 +79,10 @@ async fn keyboard_task(k: KeyboardResources) {
             rep = new_rep;
             let mut packet = Packet::default();
             packet.copy_from_slice(&rep.to_le_bytes());
-            send_packet(&packet).await;
+            radio.send_packet(&packet).await;
         }
         Timer::after_micros(5).await;
     }
-}
-
-#[interrupt]
-unsafe fn EGU1_SWI1() {
-    RADIO_EXECUTOR.on_interrupt()
 }
 
 #[entry]
@@ -99,14 +92,12 @@ fn main() -> ! {
     let p = embassy_nrf::init(config);
     let r = split_resources!(p);
 
-    embassy_nrf::interrupt::EGU1_SWI1.set_priority(embassy_nrf::interrupt::Priority::P1);
     embassy_nrf::interrupt::RADIO.set_priority(embassy_nrf::interrupt::Priority::P0);
+    embassy_nrf::interrupt::TIMER0.set_priority(embassy_nrf::interrupt::Priority::P0);
     embassy_nrf::interrupt::GPIOTE.set_priority(embassy_nrf::interrupt::Priority::P2);
-    let spawner = RADIO_EXECUTOR.start(embassy_nrf::interrupt::EGU1_SWI1);
-    spawner.spawn(radio_task(r.radio)).unwrap();
 
     let executor = THREAD_EXECUTOR.init_with(Executor::new);
     executor.run(|spawner| {
-        spawner.spawn(keyboard_task(r.keyboard)).unwrap();
+        spawner.spawn(keyboard_task(r.keyboard, r.radio).unwrap());
     });
 }

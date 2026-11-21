@@ -113,7 +113,7 @@ async fn main(_spawner: Spawner) {
         hid_boot_protocol: embassy_usb::class::hid::HidBootProtocol::None,
         report_descriptor: BufferReport::desc(),
         request_handler: None,
-        poll_ms: 1,
+        poll_ms: 10,
         max_packet_size: 64,
     };
     let mouse_config = embassy_usb::class::hid::Config {

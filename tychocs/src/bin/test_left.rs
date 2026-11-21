@@ -5,7 +5,7 @@ use core::{mem, ops::Deref};
 
 use assign_resources::assign_resources;
 use bruh78::{
-    radio::{self, Addresses, Packet, Radio},
+    radio::{self, Addresses, Packet, Radio, RadioClient},
     sensors::Matrix,
 };
 use cortex_m_rt::entry;

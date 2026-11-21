@@ -3,7 +3,7 @@
 
 use core::{mem, ops::Deref};
 
-use bruh78::radio::{self, receive_packet, Addresses, Packet, Radio};
+use bruh78::radio::{self, Addresses, Packet, Radio};
 use cortex_m_rt::entry;
 use defmt::{info, *};
 use embassy_executor::{Executor, InterruptExecutor, Spawner};
@@ -26,13 +26,13 @@ use embassy_time::Timer;
 use panic_probe as _;
 use static_cell::StaticCell;
 
-static RADIO_EXECUTOR: InterruptExecutor = InterruptExecutor::new();
 static THREAD_EXECUTOR: StaticCell<Executor> = StaticCell::new();
 
 bind_interrupts!(struct Irqs {
     USBD => usb::InterruptHandler<peripherals::USBD>;
     CLOCK_POWER => usb::vbus_detect::InterruptHandler;
-    RADIO  => radio::InterruptHandler;
+    RADIO  => radio::RadioInterruptHandler;
+    TIMER0 => radio::RadioTimerInterrupt;
 });
 
 #[embassy_executor::task]
@@ -42,24 +42,16 @@ async fn logger_task(usbd: Peri<'static, peripherals::USBD>) {
 }
 
 #[embassy_executor::task]
-async fn radio_task(radio: Peri<'static, peripherals::RADIO>) {
-    let addresses = Addresses::default();
-    let mut radio = Radio::new(radio, Irqs, addresses);
-    radio.set_tx_addresses(|w| w.set_txaddress(0));
-    radio.set_rx_addresses(|w| {
-        w.set_addr1(true);
-        w.set_addr2(true);
-    });
-    radio.run().await;
-}
-
-#[embassy_executor::task]
-async fn thread_task() {
+async fn thread_task(mut rad: Radio<'static>) {
     let master_loop = async {
+        let mut packet = Packet::default();
+        packet.copy_from_slice(&[2, 4, 5, 7]);
+        let mut count = 0;
         loop {
-            let data = receive_packet().await;
-            log::info!("Received {:?}", &data[..]);
-            Timer::after_millis(1).await;
+            rad.send_packet(&packet).await;
+            log::info!("Sent Packet {}", count);
+            Timer::after_millis(1000).await;
+            count += 1;
         }
     };
 
@@ -72,11 +64,6 @@ async fn thread_task() {
     join(master_loop, heartbeat_loop).await;
 }
 
-#[interrupt]
-unsafe fn EGU1_SWI1() {
-    RADIO_EXECUTOR.on_interrupt()
-}
-
 #[entry]
 fn main() -> ! {
     log::info!("Hello World!");
@@ -85,16 +72,17 @@ fn main() -> ! {
     nrf_config.hfclk_source = HfclkSource::ExternalXtal;
     let p = embassy_nrf::init(nrf_config);
 
-    embassy_nrf::interrupt::EGU1_SWI1.set_priority(embassy_nrf::interrupt::Priority::P1);
     embassy_nrf::interrupt::RADIO.set_priority(embassy_nrf::interrupt::Priority::P0);
     embassy_nrf::interrupt::USBD.set_priority(embassy_nrf::interrupt::Priority::P2);
     embassy_nrf::interrupt::CLOCK_POWER.set_priority(embassy_nrf::interrupt::Priority::P2);
-    let spawner = RADIO_EXECUTOR.start(embassy_nrf::interrupt::EGU1_SWI1);
-    spawner.spawn(radio_task(p.RADIO)).unwrap();
-
+    let mut radio = Radio::new(p.RADIO, p.TIMER0, Irqs, Irqs, Addresses::default());
+    radio.set_tx_addresses(|w| w.set_txaddress(1));
+    radio.set_rx_addresses(|w| {
+        w.set_addr0(true);
+    });
     let exectuor = THREAD_EXECUTOR.init_with(Executor::new);
     exectuor.run(|spawner| {
-        spawner.spawn(logger_task(p.USBD)).unwrap();
-        spawner.spawn(thread_task()).unwrap();
+        spawner.spawn(thread_task(radio).unwrap());
+        spawner.spawn(logger_task(p.USBD).unwrap());
     });
 }

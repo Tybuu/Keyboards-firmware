@@ -35,19 +35,17 @@ use key_lib::{
     com::Com,
     descriptor::{BufferReport, KeyboardReportNKRO, MouseReport},
     keys::{ConfigIndicator, Indicate, Keys},
-    position::DefaultSwitch,
+    position::{DefaultSwitch, KeySensors, KeyState},
     report::Report,
     storage::Storage,
+    NUM_KEYS,
 };
 // time driver
 use panic_probe as _;
-use sequential_storage::cache::NoCache;
 use static_cell::StaticCell;
 use usbd_hid::descriptor::SerializedDescriptor;
 
 static KEYS: Mutex<ThreadModeRawMutex, Keys<Indicator>> = Mutex::new(Keys::default());
-
-static CACHE: StaticCell<NoCache> = StaticCell::new();
 
 static RADIO_EXECUTOR: InterruptExecutor = InterruptExecutor::new();
 static THREAD_EXECUTOR: StaticCell<Executor> = StaticCell::new();
@@ -55,30 +53,26 @@ static THREAD_EXECUTOR: StaticCell<Executor> = StaticCell::new();
 bind_interrupts!(struct Irqs {
     USBD => usb::InterruptHandler<peripherals::USBD>;
     CLOCK_POWER => usb::vbus_detect::InterruptHandler;
-    RADIO  => radio::InterruptHandler;
+    RADIO  => radio::RadioInterruptHandler;
+    TIMER0 => radio::RadioTimerInterrupt;
     // QSPI => embassy_nrf::qspi::InterruptHandler<peripherals::QSPI>;
 });
 
 #[embassy_executor::task]
-async fn storage_task(storage: Storage<Qspi<'static, peripherals::QSPI>>) {
-    storage.run_storage().await;
-}
-
-#[embassy_executor::task]
-async fn radio_task(radio: Peri<'static, peripherals::RADIO>) {
+async fn thread_task(
+    usbd: Peri<'static, peripherals::USBD>,
+    radio: Peri<'static, peripherals::RADIO>,
+    timer: Peri<'static, peripherals::TIMER0>,
+) {
     let addresses = Addresses::default();
-    let mut radio = Radio::new(radio, Irqs, addresses);
+    let mut radio = Radio::new(radio, timer, Irqs, Irqs, addresses);
     radio.set_tx_addresses(|w| w.set_txaddress(0));
     radio.set_rx_addresses(|w| {
         w.set_addr1(true);
         w.set_addr2(true);
     });
-    radio.set_tx_power(embassy_nrf::radio::TxPower::POS8_DBM);
-    radio.run().await;
-}
+    // radio.set_tx_power(embassy_nrf::radio::TxPower::POS8_DBM);
 
-#[embassy_executor::task]
-async fn thread_task(usbd: Peri<'static, peripherals::USBD>) {
     let driver = Driver::new(usbd, Irqs, HardwareVbusDetect::new(Irqs));
 
     // Create embassy-usb Config
@@ -101,7 +95,6 @@ async fn thread_task(usbd: Peri<'static, peripherals::USBD>) {
 
     let mut key_state = State::new();
     let mut mouse_state = State::new();
-    let mut com_state = State::new();
     let mut device_handler = MyDeviceHandler::new();
 
     let mut builder = Builder::new(
@@ -115,47 +108,44 @@ async fn thread_task(usbd: Peri<'static, peripherals::USBD>) {
 
     // Create classes on the builder.
     let key_config = embassy_usb::class::hid::Config {
-        report_descriptor: KeyboardReportNKRO::desc(),
+        report_descriptor: &KeyboardReportNKRO::DESC,
+        hid_subclass: embassy_usb::class::hid::HidSubclass::No,
+        hid_boot_protocol: embassy_usb::class::hid::HidBootProtocol::None,
         request_handler: None,
         poll_ms: 1,
         max_packet_size: 32,
     };
-    let com_config = embassy_usb::class::hid::Config {
-        report_descriptor: BufferReport::desc(),
-        request_handler: None,
-        poll_ms: 1,
-        max_packet_size: 64,
-    };
     let mouse_config = embassy_usb::class::hid::Config {
-        report_descriptor: MouseReport::desc(),
+        report_descriptor: &MouseReport::DESC,
+        hid_subclass: embassy_usb::class::hid::HidSubclass::No,
+        hid_boot_protocol: embassy_usb::class::hid::HidBootProtocol::None,
         request_handler: None,
         poll_ms: 1,
         max_packet_size: 5,
     };
     builder.handler(&mut device_handler);
     let mut key_writer = HidWriter::<_, 32>::new(&mut builder, &mut key_state, key_config);
-    let (com_reader, com_writer) =
-        HidReaderWriter::<_, 32, 32>::new(&mut builder, &mut com_state, com_config).split();
     let mut mouse_writer = HidWriter::<_, 5>::new(&mut builder, &mut mouse_state, mouse_config);
 
     // Build the builder.
     let mut usb = builder.build();
     let usb_fut = usb.run();
 
-    let sensors = DongleSensors::new();
-    let mut report: Report<_, DefaultSwitch> = Report::new(sensors);
+    let mut sensors = DongleSensors::new(radio);
+    let mut report: Report = Report::new();
+    let mut positions = [DefaultSwitch::DEFAULT; NUM_KEYS];
 
     let mut keys = KEYS.lock().await;
     set_keys(&mut keys);
     // keys.load_keys_from_storage(0).await;
     drop(keys);
 
-    let mut com = Com::new(&KEYS, com_reader, com_writer);
     let key_loop = async {
         loop {
+            sensors.update_positions(&mut positions).await;
             let (key_rep, mouse_rep);
             {
-                (key_rep, mouse_rep) = report.generate_report(&KEYS).await;
+                (key_rep, mouse_rep) = report.generate_report(&KEYS, &positions).await;
             }
             let key_task = async {
                 if let Some(rep) = key_rep {
@@ -172,12 +162,7 @@ async fn thread_task(usbd: Peri<'static, peripherals::USBD>) {
             Timer::after_micros(5).await;
         }
     };
-    join3(usb_fut, key_loop, com.com_loop()).await;
-}
-
-#[interrupt]
-unsafe fn EGU1_SWI1() {
-    RADIO_EXECUTOR.on_interrupt()
+    join(usb_fut, key_loop).await;
 }
 
 #[entry]
@@ -186,15 +171,13 @@ fn main() -> ! {
     nrf_config.hfclk_source = HfclkSource::ExternalXtal;
     let p = embassy_nrf::init(nrf_config);
 
-    embassy_nrf::interrupt::EGU1_SWI1.set_priority(embassy_nrf::interrupt::Priority::P1);
     embassy_nrf::interrupt::RADIO.set_priority(embassy_nrf::interrupt::Priority::P0);
+    embassy_nrf::interrupt::TIMER0.set_priority(embassy_nrf::interrupt::Priority::P0);
     embassy_nrf::interrupt::USBD.set_priority(embassy_nrf::interrupt::Priority::P2);
     embassy_nrf::interrupt::CLOCK_POWER.set_priority(embassy_nrf::interrupt::Priority::P2);
-    let spawner = RADIO_EXECUTOR.start(embassy_nrf::interrupt::EGU1_SWI1);
-    spawner.spawn(radio_task(p.RADIO)).unwrap();
     let exectuor = THREAD_EXECUTOR.init_with(Executor::new);
     exectuor.run(|spawner| {
-        spawner.spawn(thread_task(p.USBD)).unwrap();
+        spawner.spawn(thread_task(p.USBD, p.RADIO, p.TIMER0).unwrap());
     });
 }
 
