@@ -22,6 +22,7 @@ use embassy_nrf::{
 use defmt_rtt as _; // global logger
 use embassy_nrf as _;
 use embassy_time::Timer;
+use host::radio::RadioState;
 // time driver
 use panic_probe as _;
 use static_cell::StaticCell;

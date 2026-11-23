@@ -26,6 +26,8 @@
             buildInputs = [
               openssl
               pkg-config
+              gdb
+              lldb
               cargo-binutils
               cargo-make
               probe-rs
